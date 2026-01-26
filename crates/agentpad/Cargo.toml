@@ -1,0 +1,24 @@
+[package]
+name = "agentpad"
+version = "0.1.0"
+edition = "2024"
+description = "TUI mínima para ordenar sesiones de trabajo de agentes"
+license = "MIT"
+
+[[bin]]
+name = "ap"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1"
+ansi-to-tui = "8.0.1"
+ratatui-core = "0.1.0"
