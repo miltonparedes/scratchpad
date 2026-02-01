@@ -198,7 +198,7 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
 
     let help_text = Text::from(vec![
         Line::from(Span::styled(
-            "Agentpad Keybindings",
+            "ScratchPad Keybindings",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),

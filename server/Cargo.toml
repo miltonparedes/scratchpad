@@ -1,12 +1,12 @@
 [package]
-name = "agentpad-relay"
+name = "scratchpad-server"
 version = "0.1.0"
 edition = "2024"
-description = "Relay server for Agentpad sync"
+description = "Relay server for ScratchPad sync"
 license = "MIT"
 
 [[bin]]
-name = "ap-relay"
+name = "sp-server"
 path = "src/main.rs"
 
 [dependencies]

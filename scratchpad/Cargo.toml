@@ -1,12 +1,12 @@
 [package]
-name = "agentpad"
+name = "scratchpad"
 version = "0.1.0"
 edition = "2024"
-description = "TUI mínima para ordenar sesiones de trabajo de agentes"
+description = "Minimal TUI for organizing agent work sessions"
 license = "MIT"
 
 [[bin]]
-name = "ap"
+name = "sp"
 path = "src/main.rs"
 
 [dependencies]

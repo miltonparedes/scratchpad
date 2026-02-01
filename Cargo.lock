@@ -3,42 +3,6 @@
 version = 4
 
 [[package]]
-name = "agentpad"
-version = "0.1.0"
-dependencies = [
- "ansi-to-tui",
- "anyhow",
- "chrono",
- "clap",
- "crossterm",
- "directories",
- "ratatui",
- "ratatui-core",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "agentpad-relay"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "futures",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1679,6 +1643,42 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scratchpad"
+version = "0.1.0"
+dependencies = [
+ "ansi-to-tui",
+ "anyhow",
+ "chrono",
+ "clap",
+ "crossterm",
+ "directories",
+ "ratatui",
+ "ratatui-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "scratchpad-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "futures",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "semver"

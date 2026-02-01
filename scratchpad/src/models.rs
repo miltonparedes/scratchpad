@@ -84,7 +84,7 @@ pub struct Config {
 }
 
 fn default_workspace_path() -> String {
-    dirs_home().join("agentpad").to_string_lossy().to_string()
+    dirs_home().join("scratchpad").to_string_lossy().to_string()
 }
 
 fn dirs_home() -> std::path::PathBuf {

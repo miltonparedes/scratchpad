@@ -140,9 +140,9 @@ impl Storage {
 }
 
 pub fn config_path() -> PathBuf {
-    directories::ProjectDirs::from("", "", "agentpad")
+    directories::ProjectDirs::from("", "", "scratchpad")
         .map(|d| d.config_dir().join("config.json"))
-        .unwrap_or_else(|| PathBuf::from("~/.config/agentpad/config.json"))
+        .unwrap_or_else(|| PathBuf::from("~/.config/scratchpad/config.json"))
 }
 
 pub fn load_config() -> Result<Config> {
