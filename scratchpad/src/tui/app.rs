@@ -7,11 +7,11 @@ use std::{
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::text::{Line, Text};
-use uuid::Uuid;
 
 use crate::markdown;
-use crate::models::{Agent, Config, Session};
-use crate::storage::Storage;
+use crate::models::{Agent, Config, Context, Session};
+use crate::names::{generate_session_name, slugify_or_generate};
+use crate::storage::{list_session_files, Storage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -31,13 +31,17 @@ pub enum Focus {
 pub enum Action {
     Continue,
     Quit,
-    RunAgent(Uuid, Agent),
-    OpenExternal(PathBuf),
+    RunAgent(String, Agent), // slug, agent
+    ViewExternal(PathBuf),
+    EditExternal(PathBuf),
+    OpenFolder(PathBuf),
 }
 
 pub struct App {
     pub storage: Storage,
     pub config: Config,
+    pub context: Context,
+    pub available_contexts: Vec<Context>,
     pub sessions: Vec<Session>,
     pub selected_index: usize,
     pub mode: Mode,
@@ -52,13 +56,22 @@ pub struct App {
     pub rendered_notes: Option<Text<'static>>,
     rendered_notes_hash: u64,
     rendered_notes_width: u16,
+    /// Files in the session directory (for when no .md entry point)
+    pub session_files: Vec<PathBuf>,
 }
 
 impl App {
-    pub fn new(storage: Storage, config: Config) -> Self {
+    pub fn new(
+        storage: Storage,
+        config: Config,
+        context: Context,
+        available_contexts: Vec<Context>,
+    ) -> Self {
         Self {
             storage,
             config,
+            context,
+            available_contexts,
             sessions: Vec::new(),
             selected_index: 0,
             mode: Mode::Normal,
@@ -73,6 +86,7 @@ impl App {
             rendered_notes: None,
             rendered_notes_hash: 0,
             rendered_notes_width: 0,
+            session_files: Vec::new(),
         }
     }
 
@@ -92,7 +106,10 @@ impl App {
                 .sessions
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| s.title.to_lowercase().contains(&query))
+                .filter(|(_, s)| {
+                    s.slug.to_lowercase().contains(&query)
+                        || s.display_title().to_lowercase().contains(&query)
+                })
                 .map(|(i, _)| i)
                 .collect();
         }
@@ -109,10 +126,23 @@ impl App {
     }
 
     fn load_selected_notes(&mut self) {
+        self.session_files.clear();
+
         if let Some(session) = self.selected_session() {
-            match self.storage.read_notes(&session.id) {
-                Ok(content) => self.notes_content = content,
-                Err(_) => self.notes_content = String::new(),
+            let slug = session.slug.clone();
+
+            // Try to find entry point
+            if let Some(entry_point) = self.storage.find_entry_point(&slug) {
+                match std::fs::read_to_string(&entry_point) {
+                    Ok(content) => self.notes_content = content,
+                    Err(_) => self.notes_content = String::new(),
+                }
+            } else {
+                // No entry point - list files instead
+                self.notes_content = String::new();
+                let session_dir = self.storage.session_dir(&slug);
+                self.session_files = list_session_files(&session_dir);
+                self.session_files.sort();
             }
         } else {
             self.notes_content = String::new();
@@ -121,11 +151,13 @@ impl App {
         self.invalidate_rendered_notes();
     }
 
-    pub fn select_session_by_prefix(&mut self, prefix: &str) {
-        let prefix_lower = prefix.to_lowercase();
+    pub fn select_session_by_name(&mut self, name: &str) {
+        let name_lower = name.to_lowercase();
         for (i, idx) in self.filtered_sessions.iter().enumerate() {
             if let Some(session) = self.sessions.get(*idx) {
-                if session.id.to_string().starts_with(&prefix_lower) {
+                if session.slug.to_lowercase() == name_lower
+                    || session.slug.to_lowercase().starts_with(&name_lower)
+                {
                     self.selected_index = i;
                     self.load_selected_notes();
                     return;
@@ -139,6 +171,12 @@ impl App {
     }
 
     pub fn ensure_rendered_notes(&mut self, width: u16) {
+        // If we have session files instead of notes content, skip rendering
+        if !self.session_files.is_empty() {
+            self.rendered_notes = None;
+            return;
+        }
+
         if self.notes_content.is_empty() {
             self.rendered_notes = Some(Text::from(Line::from("")));
             self.rendered_notes_hash = 0;
@@ -160,10 +198,7 @@ impl App {
                 self.rendered_notes = Some(text);
             }
             Err(e) => {
-                self.rendered_notes = Some(Text::from(Line::from(format!(
-                    "glow error: {}",
-                    e
-                ))));
+                self.rendered_notes = Some(Text::from(Line::from(format!("glow error: {}", e))));
             }
         }
 
@@ -215,19 +250,68 @@ impl App {
                 self.show_preview = !self.show_preview;
                 Action::Continue
             }
+            // 'g' - toggle context
+            KeyCode::Char('g') => {
+                if self.available_contexts.len() > 1 {
+                    let current_idx = self
+                        .available_contexts
+                        .iter()
+                        .position(|c| c == &self.context)
+                        .unwrap_or(0);
+                    let next_idx = (current_idx + 1) % self.available_contexts.len();
+                    self.context = self.available_contexts[next_idx].clone();
+                    self.storage.switch_context(self.context.clone());
+                    let _ = self.refresh_sessions();
+                }
+                Action::Continue
+            }
+            // 'e' - edit with editor
             KeyCode::Char('e') => {
                 if let Some(session) = self.selected_session() {
-                    let path = self.storage.session_notes_path(&session.id);
-                    Action::OpenExternal(path)
+                    let slug = session.slug.clone();
+                    if let Some(entry_point) = self.storage.find_entry_point(&slug) {
+                        Action::EditExternal(entry_point)
+                    } else {
+                        // Create notes.md if no entry point
+                        let notes_path = self.storage.session_dir(&slug).join("notes.md");
+                        if !notes_path.exists() {
+                            let _ = std::fs::write(&notes_path, "");
+                        }
+                        Action::EditExternal(notes_path)
+                    }
+                } else {
+                    Action::Continue
+                }
+            }
+            // 'v' - view with viewer
+            KeyCode::Char('v') => {
+                if let Some(session) = self.selected_session() {
+                    let slug = session.slug.clone();
+                    if let Some(entry_point) = self.storage.find_entry_point(&slug) {
+                        Action::ViewExternal(entry_point)
+                    } else {
+                        // No entry point, open the folder
+                        let session_dir = self.storage.session_dir(&slug);
+                        Action::OpenFolder(session_dir)
+                    }
+                } else {
+                    Action::Continue
+                }
+            }
+            // 'o' - open folder
+            KeyCode::Char('o') => {
+                if let Some(session) = self.selected_session() {
+                    let session_dir = self.storage.session_dir(&session.slug);
+                    Action::OpenFolder(session_dir)
                 } else {
                     Action::Continue
                 }
             }
             KeyCode::Char('r') => {
                 if let Some(session) = self.selected_session() {
-                    let id = session.id;
+                    let slug = session.slug.clone();
                     let agent = self.config.default_agent;
-                    Action::RunAgent(id, agent)
+                    Action::RunAgent(slug, agent)
                 } else {
                     Action::Continue
                 }
@@ -298,13 +382,18 @@ impl App {
     fn handle_new_session_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Enter => {
-                if !self.input.is_empty() {
-                    let session = Session::new(&self.input);
-                    if let Err(e) = self.storage.create_session(&session, None) {
-                        self.set_error(format!("Failed to create session: {}", e));
-                    } else {
-                        let _ = self.refresh_sessions();
-                    }
+                let existing = self.storage.existing_slugs().unwrap_or_default();
+                let slug = if self.input.is_empty() {
+                    generate_session_name(&existing, &self.config)
+                } else {
+                    slugify_or_generate(&self.input, &existing, &self.config)
+                };
+
+                let session = Session::new(&slug);
+                if let Err(e) = self.storage.create_session(&session, None) {
+                    self.set_error(format!("Failed to create session: {}", e));
+                } else {
+                    let _ = self.refresh_sessions();
                 }
                 self.mode = Mode::Normal;
             }
@@ -326,13 +415,11 @@ impl App {
         match key.code {
             KeyCode::Enter => {
                 if !self.input.is_empty() {
-                    let title: String = self.input.chars().take(50).collect();
-                    let title = if self.input.len() > 50 {
-                        format!("{}...", title)
-                    } else {
-                        title
-                    };
-                    let session = Session::new(title);
+                    // Generate a random name for quick session
+                    let existing = self.storage.existing_slugs().unwrap_or_default();
+                    let slug = generate_session_name(&existing, &self.config);
+
+                    let session = Session::new(&slug);
                     if let Err(e) = self.storage.create_session(&session, Some(&self.input)) {
                         self.set_error(format!("Failed to create session: {}", e));
                     } else {
