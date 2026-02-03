@@ -1,37 +1,65 @@
+use std::path::PathBuf;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A session is identified by its slug (folder name).
+/// Timestamps are derived from filesystem metadata.
+#[derive(Debug, Clone)]
 pub struct Session {
-    pub id: Uuid,
-    pub title: String,
+    /// Folder name, e.g., "quantum-reactor"
+    pub slug: String,
+    /// From filesystem creation time (or mtime as fallback)
     pub created_at: DateTime<Utc>,
+    /// From filesystem mtime
     pub updated_at: DateTime<Utc>,
-    #[serde(default)]
-    pub tags: Vec<String>,
 }
 
 impl Session {
-    pub fn new(title: impl Into<String>) -> Self {
+    pub fn new(slug: impl Into<String>) -> Self {
         let now = Utc::now();
         Self {
-            id: Uuid::new_v4(),
-            title: title.into(),
+            slug: slug.into(),
             created_at: now,
             updated_at: now,
-            tags: Vec::new(),
         }
     }
 
-    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
-        self.tags = tags;
-        self
+    /// Display the slug as a readable title (dashes become spaces, title case)
+    pub fn display_title(&self) -> String {
+        self.slug
+            .split('-')
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_uppercase().chain(chars).collect(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
+}
 
-    #[allow(dead_code)]
-    pub fn touch(&mut self) {
-        self.updated_at = Utc::now();
+/// Context determines where sessions are stored
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Context {
+    /// User-global scratchpad at ~/scratchpad
+    User,
+    /// Project-local scratchpad at .scratchpad/
+    Project(PathBuf),
+}
+
+impl Context {
+    pub fn display_name(&self) -> String {
+        match self {
+            Context::User => "User".to_string(),
+            Context::Project(path) => path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Project".to_string()),
+        }
     }
 }
 
@@ -74,17 +102,42 @@ impl std::str::FromStr for Agent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub url: String,
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_workspace_path")]
     pub workspace_path: String,
+
     #[serde(default)]
     pub default_agent: Agent,
+
+    /// Editor for `e` key / editing (e.g., "nvim", "code")
+    #[serde(default)]
     pub editor: Option<String>,
+
+    /// Viewer for `v` key / viewing (uses system default if None)
+    #[serde(default)]
     pub viewer: Option<String>,
+
+    /// Name generator: "auto", "claude", "codex", or "static"
+    #[serde(default = "default_name_generator")]
+    pub name_generator: String,
+
+    /// Optional sync server configuration
+    #[serde(default)]
+    pub server: Option<ServerConfig>,
 }
 
 fn default_workspace_path() -> String {
     dirs_home().join("scratchpad").to_string_lossy().to_string()
+}
+
+fn default_name_generator() -> String {
+    "auto".to_string()
 }
 
 fn dirs_home() -> std::path::PathBuf {
@@ -100,6 +153,8 @@ impl Default for Config {
             default_agent: Agent::default(),
             editor: None,
             viewer: None,
+            name_generator: default_name_generator(),
+            server: None,
         }
     }
 }

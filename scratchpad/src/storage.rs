@@ -1,157 +1,293 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
+use chrono::{TimeZone, Utc};
 
-use crate::models::{Config, Session};
+use crate::models::{Config, Context, Session};
 
 pub struct Storage {
     config: Config,
+    context: Context,
 }
 
 impl Storage {
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new(config: Config, context: Context) -> Self {
+        Self { config, context }
     }
 
-    pub fn workspace_path(&self) -> &Path {
-        Path::new(&self.config.workspace_path)
+    pub fn workspace_path(&self) -> PathBuf {
+        match &self.context {
+            Context::User => PathBuf::from(&self.config.workspace_path),
+            Context::Project(path) => path.clone(),
+        }
     }
 
-    pub fn sessions_dir(&self) -> PathBuf {
-        self.workspace_path().join("sessions")
+    pub fn context(&self) -> &Context {
+        &self.context
     }
 
-    pub fn session_dir(&self, session_id: &uuid::Uuid) -> PathBuf {
-        self.sessions_dir().join(session_id.to_string())
+    pub fn switch_context(&mut self, context: Context) {
+        self.context = context;
     }
 
-    pub fn session_json_path(&self, session_id: &uuid::Uuid) -> PathBuf {
-        self.session_dir(session_id).join("session.json")
-    }
-
-    pub fn session_notes_path(&self, session_id: &uuid::Uuid) -> PathBuf {
-        self.session_dir(session_id).join("notes.md")
-    }
-
-    pub fn session_files_dir(&self, session_id: &uuid::Uuid) -> PathBuf {
-        self.session_dir(session_id).join("files")
+    /// Get the directory for a session by slug
+    pub fn session_dir(&self, slug: &str) -> PathBuf {
+        self.workspace_path().join(slug)
     }
 
     pub fn ensure_workspace(&self) -> Result<()> {
-        fs::create_dir_all(self.sessions_dir())
-            .context("Failed to create sessions directory")?;
+        fs::create_dir_all(self.workspace_path())
+            .context("Failed to create workspace directory")?;
         Ok(())
     }
 
     pub fn create_session(&self, session: &Session, initial_note: Option<&str>) -> Result<()> {
-        let session_dir = self.session_dir(&session.id);
-        fs::create_dir_all(&session_dir)
-            .context("Failed to create session directory")?;
-        fs::create_dir_all(self.session_files_dir(&session.id))
-            .context("Failed to create session files directory")?;
+        if session.slug.is_empty() {
+            anyhow::bail!("Session slug cannot be empty");
+        }
 
-        self.save_session(session)?;
+        let session_dir = self.session_dir(&session.slug);
+
+        // Prevent overwriting existing sessions
+        if session_dir.exists() {
+            anyhow::bail!("Session '{}' already exists", session.slug);
+        }
+
+        fs::create_dir_all(&session_dir).context("Failed to create session directory")?;
 
         let notes_content = initial_note.unwrap_or("");
-        fs::write(self.session_notes_path(&session.id), notes_content)
-            .context("Failed to create notes.md")?;
+        fs::write(session_dir.join("notes.md"), notes_content).context("Failed to create notes.md")?;
 
         Ok(())
-    }
-
-    pub fn save_session(&self, session: &Session) -> Result<()> {
-        let json = serde_json::to_string_pretty(session)
-            .context("Failed to serialize session")?;
-        fs::write(self.session_json_path(&session.id), json)
-            .context("Failed to write session.json")?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn load_session(&self, session_id: &uuid::Uuid) -> Result<Session> {
-        let json = fs::read_to_string(self.session_json_path(session_id))
-            .context("Failed to read session.json")?;
-        let session: Session = serde_json::from_str(&json)
-            .context("Failed to parse session.json")?;
-        Ok(session)
     }
 
     pub fn list_sessions(&self) -> Result<Vec<Session>> {
-        let sessions_dir = self.sessions_dir();
-        if !sessions_dir.exists() {
+        let workspace = self.workspace_path();
+        if !workspace.exists() {
             return Ok(Vec::new());
         }
 
         let mut sessions = Vec::new();
-        for entry in fs::read_dir(&sessions_dir).context("Failed to read sessions directory")? {
+        for entry in fs::read_dir(&workspace).context("Failed to read workspace directory")? {
             let entry = entry?;
             let path = entry.path();
-            if path.is_dir() {
-                let session_json = path.join("session.json");
-                if session_json.exists() {
-                    match fs::read_to_string(&session_json) {
-                        Ok(json) => match serde_json::from_str::<Session>(&json) {
-                            Ok(session) => sessions.push(session),
-                            Err(e) => eprintln!("Warning: Failed to parse {:?}: {}", session_json, e),
-                        },
-                        Err(e) => eprintln!("Warning: Failed to read {:?}: {}", session_json, e),
-                    }
+
+            // Only include directories (not files like config)
+            if !path.is_dir() {
+                continue;
+            }
+
+            // Skip hidden directories
+            if let Some(name) = path.file_name() {
+                if name.to_string_lossy().starts_with('.') {
+                    continue;
                 }
             }
+
+            let slug = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            if slug.is_empty() {
+                continue;
+            }
+
+            // Get timestamps from filesystem metadata
+            let metadata = fs::metadata(&path).ok();
+            let (created_at, updated_at) = if let Some(meta) = metadata {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .ok()
+                            .map(|d| Utc.timestamp_opt(d.as_secs() as i64, 0).unwrap())
+                    })
+                    .unwrap_or_else(Utc::now);
+
+                // Try to get creation time, fall back to mtime
+                let ctime = meta
+                    .created()
+                    .ok()
+                    .and_then(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .ok()
+                            .map(|d| Utc.timestamp_opt(d.as_secs() as i64, 0).unwrap())
+                    })
+                    .unwrap_or(mtime);
+
+                (ctime, mtime)
+            } else {
+                let now = Utc::now();
+                (now, now)
+            };
+
+            sessions.push(Session {
+                slug,
+                created_at,
+                updated_at,
+            });
         }
 
+        // Sort by updated_at descending (most recent first)
         sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(sessions)
     }
 
-    pub fn read_notes(&self, session_id: &uuid::Uuid) -> Result<String> {
-        fs::read_to_string(self.session_notes_path(session_id))
-            .context("Failed to read notes.md")
+    /// Find the entry point file for a session (main.md, notes.md, readme.md, or first .md)
+    pub fn find_entry_point(&self, slug: &str) -> Option<PathBuf> {
+        let session_dir = self.session_dir(slug);
+        find_entry_point_in_dir(&session_dir)
+    }
+
+    /// Read the entry point file content
+    pub fn read_notes(&self, slug: &str) -> Result<String> {
+        if let Some(entry_point) = self.find_entry_point(slug) {
+            fs::read_to_string(&entry_point)
+                .with_context(|| format!("Failed to read {}", entry_point.display()))
+        } else {
+            Ok(String::new())
+        }
     }
 
     #[allow(dead_code)]
-    pub fn write_notes(&self, session_id: &uuid::Uuid, content: &str) -> Result<()> {
-        fs::write(self.session_notes_path(session_id), content)
-            .context("Failed to write notes.md")
+    pub fn write_notes(&self, slug: &str, content: &str) -> Result<()> {
+        let notes_path = self.session_dir(slug).join("notes.md");
+        fs::write(&notes_path, content).context("Failed to write notes.md")
     }
 
     #[allow(dead_code)]
-    pub fn delete_session(&self, session_id: &uuid::Uuid) -> Result<()> {
-        let session_dir = self.session_dir(session_id);
+    pub fn delete_session(&self, slug: &str) -> Result<()> {
+        let session_dir = self.session_dir(slug);
         if session_dir.exists() {
-            fs::remove_dir_all(&session_dir)
-                .context("Failed to delete session directory")?;
+            fs::remove_dir_all(&session_dir).context("Failed to delete session directory")?;
         }
         Ok(())
     }
 
-    pub fn find_session_by_prefix(&self, prefix: &str) -> Result<Option<Session>> {
+    /// Find a session by exact name or prefix match
+    pub fn find_session_by_name(&self, name: &str) -> Result<Option<Session>> {
         let sessions = self.list_sessions()?;
-        let prefix_lower = prefix.to_lowercase();
+        let name_lower = name.to_lowercase();
 
+        // First try exact match
+        for session in &sessions {
+            if session.slug.to_lowercase() == name_lower {
+                return Ok(Some(session.clone()));
+            }
+        }
+
+        // Then try prefix match
         for session in sessions {
-            if session.id.to_string().starts_with(&prefix_lower) {
+            if session.slug.to_lowercase().starts_with(&name_lower) {
                 return Ok(Some(session));
             }
         }
+
         Ok(None)
     }
+
+    /// Rename a session (move its directory)
+    pub fn rename_session(&self, old_slug: &str, new_slug: &str) -> Result<()> {
+        let old_dir = self.session_dir(old_slug);
+        let new_dir = self.session_dir(new_slug);
+
+        if !old_dir.exists() {
+            anyhow::bail!("Session '{}' not found", old_slug);
+        }
+        if new_dir.exists() {
+            anyhow::bail!("Session '{}' already exists", new_slug);
+        }
+
+        fs::rename(&old_dir, &new_dir).context("Failed to rename session directory")?;
+        Ok(())
+    }
+
+    /// Get list of existing session slugs (for collision checking)
+    pub fn existing_slugs(&self) -> Result<Vec<String>> {
+        Ok(self.list_sessions()?.into_iter().map(|s| s.slug).collect())
+    }
+}
+
+/// Find the entry point markdown file in a directory
+pub fn find_entry_point_in_dir(dir: &Path) -> Option<PathBuf> {
+    // Priority order per spec
+    for name in ["main.md", "notes.md", "readme.md", "README.md"] {
+        let path = dir.join(name);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // Fallback: first .md file alphabetically
+    let mut md_files: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .map(|e| e.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    md_files.sort();
+    md_files.first().cloned()
+}
+
+/// List all files in a session directory
+pub fn list_session_files(dir: &Path) -> Vec<PathBuf> {
+    fs::read_dir(dir)
+        .ok()
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Detect the current context based on cwd
+pub fn detect_context(cwd: &Path, _config: &Config) -> Context {
+    // Walk up from cwd looking for .scratchpad/
+    for ancestor in cwd.ancestors() {
+        let project_pad = ancestor.join(".scratchpad");
+        if project_pad.is_dir() {
+            return Context::Project(project_pad);
+        }
+    }
+    Context::User
+}
+
+/// Get all available contexts from cwd
+pub fn available_contexts(cwd: &Path, _config: &Config) -> Vec<Context> {
+    let mut contexts = vec![Context::User];
+
+    for ancestor in cwd.ancestors() {
+        let project_pad = ancestor.join(".scratchpad");
+        if project_pad.is_dir() {
+            contexts.push(Context::Project(project_pad));
+            break;
+        }
+    }
+
+    contexts
 }
 
 pub fn config_path() -> PathBuf {
     directories::ProjectDirs::from("", "", "scratchpad")
-        .map(|d| d.config_dir().join("config.json"))
-        .unwrap_or_else(|| PathBuf::from("~/.config/scratchpad/config.json"))
+        .map(|d| d.config_dir().join("config.toml"))
+        .unwrap_or_else(|| PathBuf::from("~/.config/scratchpad/config.toml"))
 }
 
 pub fn load_config() -> Result<Config> {
     let path = config_path();
     if path.exists() {
-        let json = fs::read_to_string(&path)
-            .context("Failed to read config file")?;
-        let config: Config = serde_json::from_str(&json)
-            .context("Failed to parse config file")?;
+        let content = fs::read_to_string(&path).context("Failed to read config file")?;
+        let config: Config = toml::from_str(&content).context("Failed to parse config file")?;
         Ok(config)
     } else {
         Ok(Config::default())
@@ -162,12 +298,9 @@ pub fn load_config() -> Result<Config> {
 pub fn save_config(config: &Config) -> Result<()> {
     let path = config_path();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .context("Failed to create config directory")?;
+        fs::create_dir_all(parent).context("Failed to create config directory")?;
     }
-    let json = serde_json::to_string_pretty(config)
-        .context("Failed to serialize config")?;
-    fs::write(&path, json)
-        .context("Failed to write config file")?;
+    let toml_str = toml::to_string_pretty(config).context("Failed to serialize config")?;
+    fs::write(&path, toml_str).context("Failed to write config file")?;
     Ok(())
 }
