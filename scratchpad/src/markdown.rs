@@ -15,15 +15,20 @@ pub fn render_markdown(content: &str, width: u16) -> Result<Text<'static>> {
         return Ok(Text::from(""));
     }
 
+    // Try glow first
+    match render_with_glow(content, width) {
+        Ok(text) => Ok(text),
+        Err(_) => {
+            // Fallback to basic renderer
+            Ok(render_basic(content))
+        }
+    }
+}
+
+fn render_with_glow(content: &str, width: u16) -> Result<Text<'static>> {
     let width = width.max(20);
     let mut child = Command::new("glow")
-        .args([
-            "-s",
-            "auto",
-            "-w",
-            &width.to_string(),
-            "-n",
-        ])
+        .args(["-s", "auto", "-w", &width.to_string(), "-n"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -51,6 +56,162 @@ pub fn render_markdown(content: &str, width: u16) -> Result<Text<'static>> {
         .context("Failed to parse ANSI output from glow")?;
 
     Ok(convert_text(text))
+}
+
+/// Basic markdown renderer for when glow is not available
+fn render_basic(content: &str) -> Text<'static> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut in_code_block = false;
+
+    for line in content.lines() {
+        if line.starts_with("```") {
+            in_code_block = !in_code_block;
+            lines.push(Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            continue;
+        }
+
+        if in_code_block {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", line),
+                Style::default().fg(Color::Green),
+            )));
+            continue;
+        }
+
+        // Headers
+        if line.starts_with("### ") {
+            lines.push(Line::from(Span::styled(
+                line[4..].to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        } else if line.starts_with("## ") {
+            lines.push(Line::from(Span::styled(
+                line[3..].to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        } else if line.starts_with("# ") {
+            lines.push(Line::from(Span::styled(
+                line[2..].to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        // Bullet points
+        else if line.starts_with("- ") || line.starts_with("* ") {
+            lines.push(Line::from(format!("• {}", &line[2..])));
+        }
+        // Numbered lists
+        else if line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            && line.contains(". ")
+        {
+            lines.push(Line::from(line.to_string()));
+        }
+        // Blockquotes
+        else if line.starts_with("> ") {
+            lines.push(Line::from(Span::styled(
+                format!("│ {}", &line[2..]),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        // Horizontal rules
+        else if line.trim() == "---" || line.trim() == "***" || line.trim() == "___" {
+            lines.push(Line::from(Span::styled(
+                "─".repeat(40),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        // Regular text with inline formatting
+        else {
+            lines.push(render_inline_formatting(line));
+        }
+    }
+
+    Text::from(lines)
+}
+
+/// Basic inline formatting (bold, italic, code)
+fn render_inline_formatting(line: &str) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '`' => {
+                // Inline code
+                if !current.is_empty() {
+                    spans.push(Span::raw(std::mem::take(&mut current)));
+                }
+                let mut code = String::new();
+                for ch in chars.by_ref() {
+                    if ch == '`' {
+                        break;
+                    }
+                    code.push(ch);
+                }
+                spans.push(Span::styled(code, Style::default().fg(Color::Green)));
+            }
+            '*' | '_' => {
+                // Check for bold (**) or italic (*)
+                if chars.peek() == Some(&c) {
+                    // Bold
+                    chars.next();
+                    if !current.is_empty() {
+                        spans.push(Span::raw(std::mem::take(&mut current)));
+                    }
+                    let mut bold = String::new();
+                    while let Some(ch) = chars.next() {
+                        if ch == c && chars.peek() == Some(&c) {
+                            chars.next();
+                            break;
+                        }
+                        bold.push(ch);
+                    }
+                    spans.push(Span::styled(
+                        bold,
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    // Italic
+                    if !current.is_empty() {
+                        spans.push(Span::raw(std::mem::take(&mut current)));
+                    }
+                    let mut italic = String::new();
+                    for ch in chars.by_ref() {
+                        if ch == c {
+                            break;
+                        }
+                        italic.push(ch);
+                    }
+                    spans.push(Span::styled(
+                        italic,
+                        Style::default().add_modifier(Modifier::ITALIC),
+                    ));
+                }
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        spans.push(Span::raw(current));
+    }
+
+    if spans.is_empty() {
+        Line::from("")
+    } else {
+        Line::from(spans)
+    }
 }
 
 fn convert_text(text: core_text::Text<'static>) -> Text<'static> {

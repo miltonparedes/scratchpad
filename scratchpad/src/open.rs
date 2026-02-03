@@ -24,6 +24,7 @@ fn build_open_command(path: &Path, viewer: Option<&str>) -> Command {
     }
 }
 
+/// Open a path with the system default or specified viewer (blocking)
 pub fn open_path_blocking(path: &Path, viewer: Option<&str>) -> Result<()> {
     let status = build_open_command(path, viewer)
         .status()
@@ -34,9 +35,76 @@ pub fn open_path_blocking(path: &Path, viewer: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Open a path with the system default or specified viewer (non-blocking)
 pub fn open_path_nonblocking(path: &Path, viewer: Option<&str>) -> Result<()> {
     build_open_command(path, viewer)
         .spawn()
         .with_context(|| format!("Failed to open {}", path.display()))?;
+    Ok(())
+}
+
+/// Open a file with the specified editor (blocking, waits for editor to close)
+pub fn open_with_editor(path: &Path, editor: Option<&str>) -> Result<()> {
+    let editor = editor
+        .map(String::from)
+        .or_else(|| std::env::var("EDITOR").ok())
+        .or_else(|| std::env::var("VISUAL").ok())
+        .unwrap_or_else(|| "vi".to_string());
+
+    let status = Command::new(&editor)
+        .arg(path)
+        .status()
+        .with_context(|| format!("Failed to open {} with {}", path.display(), editor))?;
+
+    if !status.success() {
+        return Err(anyhow!("Editor exited with status: {}", status));
+    }
+    Ok(())
+}
+
+/// Open a file with the specified editor (non-blocking)
+pub fn open_with_editor_nonblocking(path: &Path, editor: Option<&str>) -> Result<()> {
+    let editor = editor
+        .map(String::from)
+        .or_else(|| std::env::var("EDITOR").ok())
+        .or_else(|| std::env::var("VISUAL").ok())
+        .unwrap_or_else(|| "vi".to_string());
+
+    Command::new(&editor)
+        .arg(path)
+        .spawn()
+        .with_context(|| format!("Failed to open {} with {}", path.display(), editor))?;
+
+    Ok(())
+}
+
+/// Open a folder with the system file manager
+pub fn open_folder(path: &Path) -> Result<()> {
+    let status = if cfg!(target_os = "macos") {
+        Command::new("open").arg(path).status()
+    } else if cfg!(target_os = "windows") {
+        Command::new("explorer").arg(path).status()
+    } else {
+        Command::new("xdg-open").arg(path).status()
+    }
+    .with_context(|| format!("Failed to open folder {}", path.display()))?;
+
+    if !status.success() {
+        return Err(anyhow!("File manager exited with status: {}", status));
+    }
+    Ok(())
+}
+
+/// Open a folder with the system file manager (non-blocking)
+pub fn open_folder_nonblocking(path: &Path) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        Command::new("open").arg(path).spawn()
+    } else if cfg!(target_os = "windows") {
+        Command::new("explorer").arg(path).spawn()
+    } else {
+        Command::new("xdg-open").arg(path).spawn()
+    }
+    .with_context(|| format!("Failed to open folder {}", path.display()))?;
+
     Ok(())
 }
