@@ -1,4 +1,5 @@
 mod cli;
+mod hook;
 mod markdown;
 mod models;
 mod names;
@@ -143,10 +144,17 @@ fn main() -> Result<()> {
             let session = resolve_session(&storage, name)?;
             let agent = agent.unwrap_or(config.default_agent);
             let session_dir = storage.session_dir(&session.slug);
+            let context_label = match &context {
+                Context::User => "user",
+                Context::Project(_) => "project",
+            };
             println!("Running {agent} in session: {}", session.display_title());
 
             let status = process::Command::new(agent.command())
                 .current_dir(&session_dir)
+                .env("SP_SESSION", &session.slug)
+                .env("SP_CONTEXT", context_label)
+                .env("SP_WORKSPACE", storage.workspace_path())
                 .status()?;
 
             if !status.success() {
@@ -287,6 +295,9 @@ fn main() -> Result<()> {
                 println!("project\t{}", storage.workspace_path().display());
             }
         },
+        Some(Command::Hook { name }) => {
+            hook::handle(&name)?;
+        }
         Some(Command::Sync) => {
             println!("Sync not yet implemented.");
             println!("Configure server in ~/.config/scratchpad/config.toml");

@@ -1,0 +1,11 @@
+{
+  "name": "scratchpad",
+  "version": "0.1.0",
+  "description": "Session-based workspace manager for organizing documentation, specs, plans, and notes",
+  "author": {
+    "name": "Milton"
+  },
+  "repository": "https://github.com/milton/scratchpad",
+  "license": "MIT",
+  "keywords": ["scratchpad", "sessions", "workspace", "documentation", "notes"]
+}

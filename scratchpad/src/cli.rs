@@ -139,6 +139,13 @@ pub enum Command {
     /// Show active context and workspace path
     Context,
 
+    /// Internal: hook handler for agent integrations
+    #[command(hide = true)]
+    Hook {
+        /// Hook name: check-write
+        name: String,
+    },
+
     /// Sync sessions with server (not yet implemented)
     Sync,
 }
