@@ -139,6 +139,13 @@ pub enum Command {
     /// Show active context and workspace path
     Context,
 
+    /// Manage configuration
+    #[command(alias = "cfg")]
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Internal: hook handler for agent integrations
     #[command(hide = true)]
     Hook {
@@ -148,4 +155,20 @@ pub enum Command {
 
     /// Sync sessions with server (not yet implemented)
     Sync,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Create default config file with documentation
+    Init {
+        /// Overwrite existing config
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print config file path
+    Path,
+    /// Show effective configuration
+    Show,
+    /// Open config in editor
+    Edit,
 }

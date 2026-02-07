@@ -1,4 +1,5 @@
 mod cli;
+mod config;
 mod hook;
 mod markdown;
 mod models;
@@ -16,10 +17,11 @@ use anyhow::{Context as _, Result};
 use clap::Parser;
 
 use cli::{Cli, Command};
+use config::load_config;
 use models::{Context, Session};
 use names::{generate_session_name, slugify, slugify_or_generate};
 use open::{open_folder, open_path_blocking, open_with_editor};
-use storage::{Storage, available_contexts, build_file_tree, detect_context, load_config};
+use storage::{Storage, available_contexts, build_file_tree, detect_context};
 
 fn pick_session_fzf(storage: &Storage) -> Result<Session> {
     let sessions = storage.list_sessions()?;
@@ -295,12 +297,15 @@ fn main() -> Result<()> {
                 println!("project\t{}", storage.workspace_path().display());
             }
         },
+        Some(Command::Config { action }) => {
+            config::handle_config(action, &config)?;
+        }
         Some(Command::Hook { name }) => {
             hook::handle(&name)?;
         }
         Some(Command::Sync) => {
             println!("Sync not yet implemented.");
-            println!("Configure server in ~/.config/scratchpad/config.toml");
+            println!("Configure server in {}", config::config_path().display());
         }
     }
 

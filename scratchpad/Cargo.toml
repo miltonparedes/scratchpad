@@ -24,3 +24,6 @@ anyhow = "1.0.100"
 ansi-to-tui = "8.0.1"
 rand = "0.9"
 which = "7.0"
+
+[dev-dependencies]
+tempfile = "3"

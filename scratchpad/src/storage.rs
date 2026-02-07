@@ -356,31 +356,3 @@ pub fn available_contexts(cwd: &Path, _config: &Config) -> Vec<Context> {
 
     contexts
 }
-
-pub fn config_path() -> PathBuf {
-    directories::ProjectDirs::from("", "", "scratchpad")
-        .map(|d| d.config_dir().join("config.toml"))
-        .unwrap_or_else(|| PathBuf::from("~/.config/scratchpad/config.toml"))
-}
-
-pub fn load_config() -> Result<Config> {
-    let path = config_path();
-    if path.exists() {
-        let content = fs::read_to_string(&path).context("Failed to read config file")?;
-        let config: Config = toml::from_str(&content).context("Failed to parse config file")?;
-        Ok(config)
-    } else {
-        Ok(Config::default())
-    }
-}
-
-#[allow(dead_code)]
-pub fn save_config(config: &Config) -> Result<()> {
-    let path = config_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).context("Failed to create config directory")?;
-    }
-    let toml_str = toml::to_string_pretty(config).context("Failed to serialize config")?;
-    fs::write(&path, toml_str).context("Failed to write config file")?;
-    Ok(())
-}

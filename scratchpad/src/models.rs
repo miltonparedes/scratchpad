@@ -121,6 +121,10 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Config schema version for forward compatibility
+    #[serde(default)]
+    pub config_version: u32,
+
     #[serde(default = "default_workspace_path")]
     pub workspace_path: String,
 
@@ -144,7 +148,7 @@ pub struct Config {
     pub server: Option<ServerConfig>,
 }
 
-fn default_workspace_path() -> String {
+pub fn default_workspace_path() -> String {
     dirs_home().join("scratchpad").to_string_lossy().to_string()
 }
 
@@ -161,6 +165,7 @@ fn dirs_home() -> std::path::PathBuf {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            config_version: crate::config::CURRENT_CONFIG_VERSION,
             workspace_path: default_workspace_path(),
             default_agent: Agent::default(),
             editor: None,
