@@ -9,9 +9,9 @@ use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::models::{Config, Context};
 use crate::open::{open_folder_nonblocking, open_path_nonblocking};
@@ -43,7 +43,7 @@ pub fn run(
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        eprintln!("Error: {:?}", err);
+        eprintln!("Error: {err:?}");
     }
 
     Ok(())
@@ -92,14 +92,14 @@ fn run_app(
                     )?;
 
                     if let Err(e) = status {
-                        app.set_error(format!("Failed to run agent: {}", e));
+                        app.set_error(format!("Failed to run agent: {e}"));
                     }
 
                     app.refresh_sessions()?;
                 }
                 app::Action::ViewExternal(path) => {
                     if let Err(e) = open_path_nonblocking(&path, app.config.viewer.as_deref()) {
-                        app.set_error(format!("Failed to view: {}", e));
+                        app.set_error(format!("Failed to view: {e}"));
                     }
                 }
                 app::Action::EditExternal(path) => {
@@ -115,7 +115,7 @@ fn run_app(
                     if let Err(e) =
                         crate::open::open_with_editor(&path, app.config.editor.as_deref())
                     {
-                        app.set_error(format!("Failed to edit: {}", e));
+                        app.set_error(format!("Failed to edit: {e}"));
                     }
 
                     enable_raw_mode()?;
@@ -130,7 +130,7 @@ fn run_app(
                 }
                 app::Action::OpenFolder(path) => {
                     if let Err(e) = open_folder_nonblocking(&path) {
-                        app.set_error(format!("Failed to open folder: {}", e));
+                        app.set_error(format!("Failed to open folder: {e}"));
                     }
                 }
             }

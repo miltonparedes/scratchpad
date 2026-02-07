@@ -23,6 +23,7 @@ impl Storage {
         }
     }
 
+    #[allow(dead_code)]
     pub fn context(&self) -> &Context {
         &self.context
     }
@@ -57,7 +58,8 @@ impl Storage {
         fs::create_dir_all(&session_dir).context("Failed to create session directory")?;
 
         let notes_content = initial_note.unwrap_or("");
-        fs::write(session_dir.join("notes.md"), notes_content).context("Failed to create notes.md")?;
+        fs::write(session_dir.join("notes.md"), notes_content)
+            .context("Failed to create notes.md")?;
 
         Ok(())
     }
@@ -143,6 +145,7 @@ impl Storage {
     }
 
     /// Read the entry point file content
+    #[allow(dead_code)]
     pub fn read_notes(&self, slug: &str) -> Result<String> {
         if let Some(entry_point) = self.find_entry_point(slug) {
             fs::read_to_string(&entry_point)
@@ -195,10 +198,10 @@ impl Storage {
         let new_dir = self.session_dir(new_slug);
 
         if !old_dir.exists() {
-            anyhow::bail!("Session '{}' not found", old_slug);
+            anyhow::bail!("Session '{old_slug}' not found");
         }
         if new_dir.exists() {
-            anyhow::bail!("Session '{}' already exists", new_slug);
+            anyhow::bail!("Session '{new_slug}' already exists");
         }
 
         fs::rename(&old_dir, &new_dir).context("Failed to rename session directory")?;
@@ -241,12 +244,7 @@ pub fn find_entry_point_in_dir(dir: &Path) -> Option<PathBuf> {
 pub fn list_session_files(dir: &Path) -> Vec<PathBuf> {
     fs::read_dir(dir)
         .ok()
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .collect()
-        })
+        .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
         .unwrap_or_default()
 }
 

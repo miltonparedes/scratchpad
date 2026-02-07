@@ -11,7 +11,7 @@ use ratatui::text::{Line, Text};
 use crate::markdown;
 use crate::models::{Agent, Config, Context, Session};
 use crate::names::{generate_session_name, slugify_or_generate};
-use crate::storage::{list_session_files, Storage};
+use crate::storage::{Storage, list_session_files};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -198,7 +198,7 @@ impl App {
                 self.rendered_notes = Some(text);
             }
             Err(e) => {
-                self.rendered_notes = Some(Text::from(Line::from(format!("glow error: {}", e))));
+                self.rendered_notes = Some(Text::from(Line::from(format!("glow error: {e}"))));
             }
         }
 
@@ -391,7 +391,7 @@ impl App {
 
                 let session = Session::new(&slug);
                 if let Err(e) = self.storage.create_session(&session, None) {
-                    self.set_error(format!("Failed to create session: {}", e));
+                    self.set_error(format!("Failed to create session: {e}"));
                 } else {
                     let _ = self.refresh_sessions();
                 }
@@ -421,7 +421,7 @@ impl App {
 
                     let session = Session::new(&slug);
                     if let Err(e) = self.storage.create_session(&session, Some(&self.input)) {
-                        self.set_error(format!("Failed to create session: {}", e));
+                        self.set_error(format!("Failed to create session: {e}"));
                     } else {
                         let _ = self.refresh_sessions();
                     }

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 fn build_open_command(path: &Path, viewer: Option<&str>) -> Command {
     if let Some(viewer) = viewer {
@@ -30,7 +30,7 @@ pub fn open_path_blocking(path: &Path, viewer: Option<&str>) -> Result<()> {
         .status()
         .with_context(|| format!("Failed to open {}", path.display()))?;
     if !status.success() {
-        return Err(anyhow!("Open command failed with status: {}", status));
+        return Err(anyhow!("Open command failed with status: {status}"));
     }
     Ok(())
 }
@@ -54,15 +54,16 @@ pub fn open_with_editor(path: &Path, editor: Option<&str>) -> Result<()> {
     let status = Command::new(&editor)
         .arg(path)
         .status()
-        .with_context(|| format!("Failed to open {} with {}", path.display(), editor))?;
+        .with_context(|| format!("Failed to open {} with {editor}", path.display()))?;
 
     if !status.success() {
-        return Err(anyhow!("Editor exited with status: {}", status));
+        return Err(anyhow!("Editor exited with status: {status}"));
     }
     Ok(())
 }
 
 /// Open a file with the specified editor (non-blocking)
+#[allow(dead_code)]
 pub fn open_with_editor_nonblocking(path: &Path, editor: Option<&str>) -> Result<()> {
     let editor = editor
         .map(String::from)
@@ -73,7 +74,7 @@ pub fn open_with_editor_nonblocking(path: &Path, editor: Option<&str>) -> Result
     Command::new(&editor)
         .arg(path)
         .spawn()
-        .with_context(|| format!("Failed to open {} with {}", path.display(), editor))?;
+        .with_context(|| format!("Failed to open {} with {editor}", path.display()))?;
 
     Ok(())
 }
@@ -90,7 +91,7 @@ pub fn open_folder(path: &Path) -> Result<()> {
     .with_context(|| format!("Failed to open folder {}", path.display()))?;
 
     if !status.success() {
-        return Err(anyhow!("File manager exited with status: {}", status));
+        return Err(anyhow!("File manager exited with status: {status}"));
     }
     Ok(())
 }

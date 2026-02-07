@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::models::Context;
@@ -72,7 +72,7 @@ fn draw_session_list(f: &mut Frame, app: &App, area: Rect) {
                 let date = session.updated_at.format("%m/%d %H:%M");
                 let content = Line::from(vec![
                     Span::styled(&session.slug, style),
-                    Span::styled(format!("  {}", date), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("  {date}"), Style::default().fg(Color::DarkGray)),
                 ]);
 
                 ListItem::new(content).style(style)
@@ -86,11 +86,10 @@ fn draw_session_list(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let title = if app.search_query.is_empty() {
-        format!(" {} ({}) ", context_label, app.filtered_sessions.len())
+        format!(" {context_label} ({}) ", app.filtered_sessions.len())
     } else {
         format!(
-            " {} ({}/{}) [{}] ",
-            context_label,
+            " {context_label} ({}/{}) [{}] ",
             app.filtered_sessions.len(),
             app.sessions.len(),
             app.search_query
@@ -135,7 +134,7 @@ fn draw_notes_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| file.display().to_string());
-            lines.push(Line::from(format!("  {}", name)));
+            lines.push(Line::from(format!("  {name}")));
         }
 
         if app.session_files.is_empty() {
@@ -201,7 +200,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
 
     let status = Line::from(vec![
         Span::styled(
-            format!(" {} ", mode_str),
+            format!(" {mode_str} "),
             Style::default().bg(Color::Cyan).fg(Color::Black),
         ),
         Span::raw(" "),
@@ -219,16 +218,13 @@ fn draw_input_popup(f: &mut Frame, app: &App, title: &str, area: Rect) {
     let input = Paragraph::new(app.input.as_str()).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" {} ", title))
+            .title(format!(" {title} "))
             .border_style(Style::default().fg(Color::Yellow)),
     );
 
     f.render_widget(input, popup_area);
 
-    f.set_cursor_position((
-        popup_area.x + app.input.len() as u16 + 1,
-        popup_area.y + 1,
-    ));
+    f.set_cursor_position((popup_area.x + app.input.len() as u16 + 1, popup_area.y + 1));
 }
 
 fn draw_help_popup(f: &mut Frame, area: Rect) {

@@ -13,17 +13,17 @@ use rand::prelude::*;
 use crate::models::Config;
 
 const ADJECTIVES: &[&str] = &[
-    "atomic", "quantum", "orbital", "galactic", "nuclear", "binary", "cryo",
-    "turbo", "nano", "stealth", "hyper", "cosmic", "neon", "plasma", "cyber",
-    "chrome", "vector", "rogue", "phantom", "shadow", "blazing", "frozen",
-    "silent", "swift", "dark", "bright", "wild", "calm", "fierce", "gentle",
+    "atomic", "quantum", "orbital", "galactic", "nuclear", "binary", "cryo", "turbo", "nano",
+    "stealth", "hyper", "cosmic", "neon", "plasma", "cyber", "chrome", "vector", "rogue",
+    "phantom", "shadow", "blazing", "frozen", "silent", "swift", "dark", "bright", "wild", "calm",
+    "fierce", "gentle",
 ];
 
 const NOUNS: &[&str] = &[
-    "comet", "reactor", "pulsar", "quasar", "drone", "nexus", "vortex",
-    "titan", "phoenix", "cipher", "matrix", "daemon", "kernel", "codec",
-    "payload", "vertex", "axiom", "proxy", "mantis", "falcon", "spark",
-    "storm", "wave", "pulse", "flare", "orbit", "prism", "beacon", "echo",
+    "comet", "reactor", "pulsar", "quasar", "drone", "nexus", "vortex", "titan", "phoenix",
+    "cipher", "matrix", "daemon", "kernel", "codec", "payload", "vertex", "axiom", "proxy",
+    "mantis", "falcon", "spark", "storm", "wave", "pulse", "flare", "orbit", "prism", "beacon",
+    "echo",
 ];
 
 const MODIFIERS: &[&str] = &[
@@ -85,11 +85,11 @@ fn generate_static_name() -> String {
     if rng.random_bool(0.8) {
         let adj = ADJECTIVES[rng.random_range(0..ADJECTIVES.len())];
         let noun = NOUNS[rng.random_range(0..NOUNS.len())];
-        format!("{}-{}", adj, noun)
+        format!("{adj}-{noun}")
     } else {
         let noun = NOUNS[rng.random_range(0..NOUNS.len())];
         let modifier = MODIFIERS[rng.random_range(0..MODIFIERS.len())];
-        format!("{}-{}", noun, modifier)
+        format!("{noun}-{modifier}")
     }
 }
 
@@ -118,7 +118,11 @@ fn try_claude_generate() -> Option<String> {
         .replace(' ', "-");
 
     // Validate it looks like a reasonable name
-    if name.contains('-') && name.len() >= 5 && name.len() <= 30 && name.chars().all(|c| c.is_alphanumeric() || c == '-') {
+    if name.contains('-')
+        && name.len() >= 5
+        && name.len() <= 30
+        && name.chars().all(|c| c.is_alphanumeric() || c == '-')
+    {
         Some(name)
     } else {
         None
@@ -151,7 +155,11 @@ fn try_codex_generate() -> Option<String> {
         .replace(' ', "-");
 
     // Validate it looks like a reasonable name
-    if name.contains('-') && name.len() >= 5 && name.len() <= 30 && name.chars().all(|c| c.is_alphanumeric() || c == '-') {
+    if name.contains('-')
+        && name.len() >= 5
+        && name.len() <= 30
+        && name.chars().all(|c| c.is_alphanumeric() || c == '-')
+    {
         Some(name)
     } else {
         None
@@ -167,7 +175,7 @@ fn generate_llm_name(config: &Config) -> Option<String> {
         }
         "claude" => try_claude_generate(),
         "codex" => try_codex_generate(),
-        "static" | _ => None,
+        _ => None,
     }
 }
 
@@ -188,7 +196,7 @@ pub fn generate_session_name(existing: &[String], config: &Config) -> String {
     // Fallback: add numeric suffix
     let base = generate_static_name();
     for i in 2..100 {
-        let name = format!("{}-{}", base, i);
+        let name = format!("{base}-{i}");
         if !existing.contains(&name) {
             save_to_cache(&name);
             return name;
@@ -196,7 +204,7 @@ pub fn generate_session_name(existing: &[String], config: &Config) -> String {
     }
 
     // Ultimate fallback
-    let name = format!("{}-{}", base, rand::rng().random_range(100..1000));
+    let name = format!("{base}-{}", rand::rng().random_range(100..1000));
     save_to_cache(&name);
     name
 }
@@ -214,11 +222,7 @@ pub fn slugify(title: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join("-");
 
-    if slug.is_empty() {
-        None
-    } else {
-        Some(slug)
-    }
+    if slug.is_empty() { None } else { Some(slug) }
 }
 
 /// Convert a title to a slug, falling back to a generated name if empty.
@@ -233,9 +237,18 @@ mod tests {
     #[test]
     fn test_slugify() {
         assert_eq!(slugify("Hello World"), Some("hello-world".to_string()));
-        assert_eq!(slugify("My Project 2024"), Some("my-project-2024".to_string()));
-        assert_eq!(slugify("  multiple   spaces  "), Some("multiple-spaces".to_string()));
-        assert_eq!(slugify("special!@#chars"), Some("special-chars".to_string()));
+        assert_eq!(
+            slugify("My Project 2024"),
+            Some("my-project-2024".to_string())
+        );
+        assert_eq!(
+            slugify("  multiple   spaces  "),
+            Some("multiple-spaces".to_string())
+        );
+        assert_eq!(
+            slugify("special!@#chars"),
+            Some("special-chars".to_string())
+        );
         // Edge cases that should return None
         assert_eq!(slugify("!!!"), None);
         assert_eq!(slugify("   "), None);

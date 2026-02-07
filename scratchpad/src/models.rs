@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// A session is identified by its slug (folder name).
 /// Timestamps are derived from filesystem metadata.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Session {
     /// Folder name, e.g., "quantum-reactor"
     pub slug: String,
@@ -96,7 +97,7 @@ impl std::str::FromStr for Agent {
         match s.to_lowercase().as_str() {
             "claude" => Ok(Agent::Claude),
             "codex" => Ok(Agent::Codex),
-            _ => Err(format!("Unknown agent: {}", s)),
+            _ => Err(format!("Unknown agent: {s}")),
         }
     }
 }

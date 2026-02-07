@@ -17,7 +17,7 @@ use cli::{Cli, Command};
 use models::{Context, Session};
 use names::{generate_session_name, slugify, slugify_or_generate};
 use open::{open_folder, open_path_blocking, open_with_editor};
-use storage::{available_contexts, detect_context, load_config, Storage};
+use storage::{Storage, available_contexts, detect_context, load_config};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -58,7 +58,7 @@ fn main() -> Result<()> {
             };
             let session = Session::new(&slug);
             storage.create_session(&session, None)?;
-            println!("Created session: {}", slug);
+            println!("Created session: {slug}");
             println!("  {}", storage.session_dir(&slug).display());
         }
         Some(Command::Quick { text }) => {
@@ -66,34 +66,32 @@ fn main() -> Result<()> {
             let slug = generate_session_name(&existing, &config);
             let session = Session::new(&slug);
             storage.create_session(&session, Some(&text))?;
-            println!("Created quick session: {}", slug);
+            println!("Created quick session: {slug}");
             println!("  {}", storage.session_dir(&slug).display());
         }
         Some(Command::Open { name }) => {
             let contexts = available_contexts(&cwd, &config);
             tui::run(config, context, contexts, Some(&name))?;
         }
-        Some(Command::Run { name, agent }) => {
-            match storage.find_session_by_name(&name)? {
-                Some(session) => {
-                    let agent = agent.unwrap_or(config.default_agent);
-                    let session_dir = storage.session_dir(&session.slug);
-                    println!("Running {} in session: {}", agent, session.display_title());
+        Some(Command::Run { name, agent }) => match storage.find_session_by_name(&name)? {
+            Some(session) => {
+                let agent = agent.unwrap_or(config.default_agent);
+                let session_dir = storage.session_dir(&session.slug);
+                println!("Running {agent} in session: {}", session.display_title());
 
-                    let status = std::process::Command::new(agent.command())
-                        .current_dir(&session_dir)
-                        .status()?;
+                let status = std::process::Command::new(agent.command())
+                    .current_dir(&session_dir)
+                    .status()?;
 
-                    if !status.success() {
-                        std::process::exit(status.code().unwrap_or(1));
-                    }
-                }
-                None => {
-                    eprintln!("Session not found: {}", name);
-                    std::process::exit(1);
+                if !status.success() {
+                    std::process::exit(status.code().unwrap_or(1));
                 }
             }
-        }
+            None => {
+                eprintln!("Session not found: {name}");
+                std::process::exit(1);
+            }
+        },
         Some(Command::View { name }) => {
             match storage.find_session_by_name(&name)? {
                 Some(session) => {
@@ -106,7 +104,7 @@ fn main() -> Result<()> {
                     }
                 }
                 None => {
-                    eprintln!("Session not found: {}", name);
+                    eprintln!("Session not found: {name}");
                     std::process::exit(1);
                 }
             }
@@ -127,7 +125,7 @@ fn main() -> Result<()> {
                     }
                 }
                 None => {
-                    eprintln!("Session not found: {}", name);
+                    eprintln!("Session not found: {name}");
                     std::process::exit(1);
                 }
             }
@@ -141,8 +139,8 @@ fn main() -> Result<()> {
                     Context::User => "User".to_string(),
                     Context::Project(_) => format!("Project: {}", context.display_name()),
                 };
-                println!("[{}]", context_label);
-                println!("{:<25}  {}", "NAME", "UPDATED");
+                println!("[{context_label}]");
+                println!("{:<25}  UPDATED", "NAME");
                 println!("{}", "-".repeat(50));
                 for session in sessions {
                     let name = if session.slug.len() > 25 {
@@ -167,15 +165,15 @@ fn main() -> Result<()> {
                     let new_slug = match slugify(&new_name) {
                         Some(s) => s,
                         None => {
-                            eprintln!("Invalid session name: '{}'", new_name);
+                            eprintln!("Invalid session name: '{new_name}'");
                             std::process::exit(1);
                         }
                     };
                     storage.rename_session(&session.slug, &new_slug)?;
-                    println!("Renamed '{}' to '{}'", session.slug, new_slug);
+                    println!("Renamed '{}' to '{new_slug}'", session.slug);
                 }
                 None => {
-                    eprintln!("Session not found: {}", current);
+                    eprintln!("Session not found: {current}");
                     std::process::exit(1);
                 }
             }
@@ -238,7 +236,7 @@ fn handle_init(gitignore: bool, exclude: bool) -> Result<()> {
             if !existing.is_empty() && !existing.ends_with('\n') {
                 writeln!(file)?;
             }
-            writeln!(file, "{}", entry)?;
+            writeln!(file, "{entry}")?;
             println!("Added .scratchpad/ to .gitignore");
         }
     } else {
@@ -261,7 +259,7 @@ fn handle_init(gitignore: bool, exclude: bool) -> Result<()> {
                     if !existing.is_empty() && !existing.ends_with('\n') {
                         writeln!(file)?;
                     }
-                    writeln!(file, "{}", entry)?;
+                    writeln!(file, "{entry}")?;
                     println!("Added .scratchpad/ to .git/info/exclude");
                 }
             } else {

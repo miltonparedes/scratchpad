@@ -1,8 +1,8 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use anyhow::{anyhow, Context, Result};
 use ansi_to_tui::IntoText as _;
+use anyhow::{Context, Result, anyhow};
 use ratatui::{
     layout::Alignment,
     style::{Color, Modifier, Style},
@@ -42,12 +42,14 @@ fn render_with_glow(content: &str, width: u16) -> Result<Text<'static>> {
             .context("Failed to write to glow stdin")?;
     }
 
-    let output = child.wait_with_output().context("Failed to read glow output")?;
+    let output = child
+        .wait_with_output()
+        .context("Failed to read glow output")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let msg = stderr.trim();
         let msg = if msg.is_empty() { "glow failed" } else { msg };
-        return Err(anyhow!("{}", msg));
+        return Err(anyhow!("{msg}"));
     }
 
     let text = output
@@ -75,49 +77,53 @@ fn render_basic(content: &str) -> Text<'static> {
 
         if in_code_block {
             lines.push(Line::from(Span::styled(
-                format!("  {}", line),
+                format!("  {line}"),
                 Style::default().fg(Color::Green),
             )));
             continue;
         }
 
         // Headers
-        if line.starts_with("### ") {
+        if let Some(stripped) = line.strip_prefix("### ") {
             lines.push(Line::from(Span::styled(
-                line[4..].to_string(),
+                stripped.to_string(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )));
-        } else if line.starts_with("## ") {
+        } else if let Some(stripped) = line.strip_prefix("## ") {
             lines.push(Line::from(Span::styled(
-                line[3..].to_string(),
+                stripped.to_string(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )));
-        } else if line.starts_with("# ") {
+        } else if let Some(stripped) = line.strip_prefix("# ") {
             lines.push(Line::from(Span::styled(
-                line[2..].to_string(),
+                stripped.to_string(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )));
         }
         // Bullet points
-        else if line.starts_with("- ") || line.starts_with("* ") {
-            lines.push(Line::from(format!("• {}", &line[2..])));
+        else if let Some(stripped) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            lines.push(Line::from(format!("• {stripped}")));
         }
         // Numbered lists
-        else if line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+        else if line
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
             && line.contains(". ")
         {
             lines.push(Line::from(line.to_string()));
         }
         // Blockquotes
-        else if line.starts_with("> ") {
+        else if let Some(stripped) = line.strip_prefix("> ") {
             lines.push(Line::from(Span::styled(
-                format!("│ {}", &line[2..]),
+                format!("│ {stripped}"),
                 Style::default().fg(Color::DarkGray),
             )));
         }
