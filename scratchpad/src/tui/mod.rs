@@ -90,6 +90,7 @@ fn run_app(
                         EnterAlternateScreen,
                         EnableMouseCapture
                     )?;
+                    terminal.clear()?;
 
                     if let Err(e) = status {
                         app.set_error(format!("Failed to run agent: {e}"));
@@ -124,6 +125,7 @@ fn run_app(
                         EnterAlternateScreen,
                         EnableMouseCapture
                     )?;
+                    terminal.clear()?;
 
                     // Reload notes after editing
                     app.refresh_sessions()?;
