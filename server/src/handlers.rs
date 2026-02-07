@@ -1,18 +1,18 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use axum::extract::ws::{Message, WebSocket};
 use axum::{
+    Json,
     extract::{Path, Query, State, WebSocketUpgrade},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
-use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::RwLock;
 
-use crate::models::{GetOpsQuery, Op, PushOpsRequest, PushOpsResponse, Snapshot, WsMessage};
 use crate::AppState;
+use crate::models::{GetOpsQuery, Op, PushOpsRequest, PushOpsResponse, Snapshot, WsMessage};
 
 pub async fn health() -> &'static str {
     "ok"
@@ -39,7 +39,7 @@ pub async fn push_ops(
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to push op: {}", e);
+                tracing::warn!("Failed to push op: {e}");
             }
         }
     }
@@ -109,10 +109,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     Err(_) => false,
                 };
 
-                if should_send {
-                    if sender.send(Message::Text(msg.into())).await.is_err() {
-                        break;
-                    }
+                if should_send && sender.send(Message::Text(msg.into())).await.is_err() {
+                    break;
                 }
             }
         })
@@ -124,18 +122,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 match ws_msg.msg_type.as_str() {
                     "subscribe" => {
                         if let Some(workspace_id) = ws_msg.workspace_id {
-                            subscribed_workspaces
-                                .write()
-                                .await
-                                .insert(workspace_id);
+                            subscribed_workspaces.write().await.insert(workspace_id);
                         }
                     }
                     "unsubscribe" => {
                         if let Some(workspace_id) = ws_msg.workspace_id {
-                            subscribed_workspaces
-                                .write()
-                                .await
-                                .remove(&workspace_id);
+                            subscribed_workspaces.write().await.remove(&workspace_id);
                         }
                     }
                     "push" => {

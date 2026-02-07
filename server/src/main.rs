@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
@@ -31,7 +31,8 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "scratchpad-server.db".to_string());
+    let db_path =
+        std::env::var("DATABASE_PATH").unwrap_or_else(|_| "scratchpad-server.db".to_string());
     let db = Database::open(&db_path)?;
     db.init()?;
 
@@ -49,7 +50,10 @@ async fn main() -> Result<()> {
         .route("/api/ops", post(handlers::push_ops))
         .route("/api/ops/{workspace_id}", get(handlers::get_ops))
         .route("/api/snapshot/{workspace_id}", get(handlers::get_snapshot))
-        .route("/api/snapshot/{workspace_id}", post(handlers::save_snapshot))
+        .route(
+            "/api/snapshot/{workspace_id}",
+            post(handlers::save_snapshot),
+        )
         .route("/ws", get(handlers::websocket_handler))
         .layer(cors)
         .with_state(state);

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{params, Connection, Error as SqlError};
+use rusqlite::{Connection, Error as SqlError, params};
 use std::sync::Mutex;
 
 use crate::models::{Op, Snapshot};
