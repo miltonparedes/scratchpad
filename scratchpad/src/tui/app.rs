@@ -9,9 +9,9 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::text::{Line, Text};
 
 use crate::markdown;
-use crate::models::{Agent, Config, Context, Session};
+use crate::models::{Agent, Config, Context, FileTreeEntry, Session};
 use crate::names::{generate_session_name, slugify_or_generate};
-use crate::storage::{Storage, list_session_files};
+use crate::storage::{Storage, build_file_tree, list_session_files};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -58,6 +58,7 @@ pub struct App {
     rendered_notes_width: u16,
     /// Files in the session directory (for when no .md entry point)
     pub session_files: Vec<PathBuf>,
+    pub file_tree: Vec<FileTreeEntry>,
 }
 
 impl App {
@@ -87,6 +88,7 @@ impl App {
             rendered_notes_hash: 0,
             rendered_notes_width: 0,
             session_files: Vec::new(),
+            file_tree: Vec::new(),
         }
     }
 
@@ -127,20 +129,22 @@ impl App {
 
     fn load_selected_notes(&mut self) {
         self.session_files.clear();
+        self.file_tree.clear();
 
         if let Some(session) = self.selected_session() {
             let slug = session.slug.clone();
+            let session_dir = self.storage.session_dir(&slug);
+            let entry_point = self.storage.find_entry_point(&slug);
 
-            // Try to find entry point
-            if let Some(entry_point) = self.storage.find_entry_point(&slug) {
-                match std::fs::read_to_string(&entry_point) {
+            self.file_tree = build_file_tree(&session_dir, entry_point.as_deref(), 3);
+
+            if let Some(ref ep) = entry_point {
+                match std::fs::read_to_string(ep) {
                     Ok(content) => self.notes_content = content,
                     Err(_) => self.notes_content = String::new(),
                 }
             } else {
-                // No entry point - list files instead
                 self.notes_content = String::new();
-                let session_dir = self.storage.session_dir(&slug);
                 self.session_files = list_session_files(&session_dir);
                 self.session_files.sort();
             }

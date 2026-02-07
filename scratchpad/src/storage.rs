@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use chrono::{TimeZone, Utc};
 
-use crate::models::{Config, Context, Session};
+use crate::models::{Config, Context, FileTreeEntry, Session};
 
 pub struct Storage {
     config: Config,
@@ -145,7 +145,6 @@ impl Storage {
     }
 
     /// Read the entry point file content
-    #[allow(dead_code)]
     pub fn read_notes(&self, slug: &str) -> Result<String> {
         if let Some(entry_point) = self.find_entry_point(slug) {
             fs::read_to_string(&entry_point)
@@ -155,13 +154,11 @@ impl Storage {
         }
     }
 
-    #[allow(dead_code)]
     pub fn write_notes(&self, slug: &str, content: &str) -> Result<()> {
         let notes_path = self.session_dir(slug).join("notes.md");
         fs::write(&notes_path, content).context("Failed to write notes.md")
     }
 
-    #[allow(dead_code)]
     pub fn delete_session(&self, slug: &str) -> Result<()> {
         let session_dir = self.session_dir(slug);
         if session_dir.exists() {
@@ -246,6 +243,91 @@ pub fn list_session_files(dir: &Path) -> Vec<PathBuf> {
         .ok()
         .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
         .unwrap_or_default()
+}
+
+/// Build a file tree for a session directory (pre-order traversal, flat list)
+pub fn build_file_tree(
+    dir: &Path,
+    entry_point: Option<&Path>,
+    max_depth: usize,
+) -> Vec<FileTreeEntry> {
+    let mut entries = Vec::new();
+    build_file_tree_recursive(dir, entry_point, 0, max_depth, &[], &mut entries);
+    entries
+}
+
+fn build_file_tree_recursive(
+    dir: &Path,
+    entry_point: Option<&Path>,
+    depth: usize,
+    max_depth: usize,
+    ancestor_is_last: &[bool],
+    entries: &mut Vec<FileTreeEntry>,
+) {
+    if depth > max_depth {
+        return;
+    }
+
+    let read_dir = match fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+
+    let mut children: Vec<_> = read_dir
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .map(|n| !n.starts_with('.'))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    children.sort_by(|a, b| {
+        let a_is_dir = a.path().is_dir();
+        let b_is_dir = b.path().is_dir();
+        match (a_is_dir, b_is_dir) {
+            (false, true) => std::cmp::Ordering::Less,
+            (true, false) => std::cmp::Ordering::Greater,
+            _ => a.file_name().cmp(&b.file_name()),
+        }
+    });
+
+    let total = children.len();
+    for (i, child) in children.into_iter().enumerate() {
+        let path = child.path();
+        let is_dir = path.is_dir();
+        let is_last = i == total - 1;
+        let name = if is_dir {
+            format!("{}/", child.file_name().to_string_lossy())
+        } else {
+            child.file_name().to_string_lossy().to_string()
+        };
+
+        let is_entry_point = entry_point.map(|ep| ep == path).unwrap_or(false);
+
+        entries.push(FileTreeEntry {
+            name,
+            is_dir,
+            depth,
+            is_last,
+            is_entry_point,
+            ancestor_is_last: ancestor_is_last.to_vec(),
+        });
+
+        if is_dir {
+            let mut next_ancestors = ancestor_is_last.to_vec();
+            next_ancestors.push(is_last);
+            build_file_tree_recursive(
+                &path,
+                entry_point,
+                depth + 1,
+                max_depth,
+                &next_ancestors,
+                entries,
+            );
+        }
+    }
 }
 
 /// Detect the current context based on cwd

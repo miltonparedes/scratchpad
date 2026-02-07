@@ -102,6 +102,17 @@ impl std::str::FromStr for Agent {
     }
 }
 
+/// A single entry in a file tree (pre-order traversal, flat list)
+#[derive(Debug, Clone)]
+pub struct FileTreeEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub depth: usize,
+    pub is_last: bool,
+    pub is_entry_point: bool,
+    pub ancestor_is_last: Vec<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub url: String,

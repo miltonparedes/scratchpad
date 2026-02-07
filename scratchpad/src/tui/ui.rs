@@ -120,9 +120,49 @@ fn draw_notes_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|s| format!(" {} ", s.display_title()))
         .unwrap_or_else(|| " Notes ".to_string());
 
-    // Check if we should show file listing instead of notes
-    let text = if !app.session_files.is_empty() {
-        // Show file listing
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style);
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    let show_tree = app.file_tree.len() > 1;
+
+    if show_tree {
+        let tree_content_height = app.file_tree.len() as u16 + 2;
+        let max_tree = (inner_area.height * 40 / 100).min(12);
+        let tree_height = tree_content_height.min(max_tree).min(inner_area.height);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(tree_height), Constraint::Min(1)])
+            .split(inner_area);
+
+        let tree_area = chunks[0];
+        let content_area = chunks[1];
+
+        let tree_text = render_file_tree(&app.file_tree, tree_area.width);
+        let tree_widget = Paragraph::new(tree_text);
+        f.render_widget(tree_widget, tree_area);
+
+        let content_text = build_content_text(app, content_area);
+        let content_widget = Paragraph::new(content_text)
+            .wrap(Wrap { trim: false })
+            .scroll((app.notes_scroll, 0));
+        f.render_widget(content_widget, content_area);
+    } else {
+        let content_text = build_content_text(app, inner_area);
+        let content_widget = Paragraph::new(content_text)
+            .wrap(Wrap { trim: false })
+            .scroll((app.notes_scroll, 0));
+        f.render_widget(content_widget, inner_area);
+    }
+}
+
+fn build_content_text(app: &mut App, area: Rect) -> Text<'static> {
+    if !app.session_files.is_empty() {
         let mut lines = vec![Line::from(Span::styled(
             "No markdown entry point. Files:",
             Style::default().fg(Color::Yellow),
@@ -135,13 +175,6 @@ fn draw_notes_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| file.display().to_string());
             lines.push(Line::from(format!("  {name}")));
-        }
-
-        if app.session_files.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  (empty directory)",
-                Style::default().fg(Color::DarkGray),
-            )));
         }
 
         lines.push(Line::from(""));
@@ -157,24 +190,83 @@ fn draw_notes_panel(f: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(Color::DarkGray),
         )))
     } else {
-        let content_width = area.width.saturating_sub(2).max(20);
+        let content_width = area.width.max(20);
         app.ensure_rendered_notes(content_width);
         app.rendered_notes
             .clone()
             .unwrap_or_else(|| Text::from(Line::from("(render failed)")))
-    };
+    }
+}
 
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((app.notes_scroll, 0));
+fn render_file_tree(tree: &[crate::models::FileTreeEntry], _width: u16) -> Text<'static> {
+    let mut lines = Vec::new();
 
-    f.render_widget(paragraph, area);
+    lines.push(Line::from(Span::styled(
+        format!("  Files ({})", tree.len()),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    for entry in tree {
+        let mut spans = Vec::new();
+
+        spans.push(Span::raw("  "));
+        for &ancestor_last in &entry.ancestor_is_last {
+            if ancestor_last {
+                spans.push(Span::raw("    "));
+            } else {
+                spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::raw("   "));
+            }
+        }
+
+        let connector = if entry.is_last {
+            "└── "
+        } else {
+            "├── "
+        };
+        spans.push(Span::styled(
+            connector,
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        let color = file_type_color(&entry.name, entry.is_dir);
+        let mut style = Style::default().fg(color);
+        if entry.is_entry_point {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        spans.push(Span::styled(entry.name.clone(), style));
+
+        if entry.is_entry_point {
+            spans.push(Span::styled("  ●", Style::default().fg(Color::Cyan)));
+        }
+
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "─".repeat(20),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    Text::from(lines)
+}
+
+fn file_type_color(name: &str, is_dir: bool) -> Color {
+    if is_dir {
+        return Color::Blue;
+    }
+    match name.rsplit('.').next() {
+        Some("md") => Color::Cyan,
+        Some("rs" | "py" | "js" | "ts" | "go" | "rb" | "c" | "cpp" | "h" | "java" | "sh") => {
+            Color::Green
+        }
+        Some("toml" | "json" | "yaml" | "yml" | "xml" | "ini" | "env") => Color::Yellow,
+        Some("png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico") => Color::Magenta,
+        Some("log") => Color::DarkGray,
+        _ => Color::White,
+    }
 }
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
