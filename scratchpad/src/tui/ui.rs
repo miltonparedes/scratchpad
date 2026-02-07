@@ -212,15 +212,17 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_input_popup(f: &mut Frame, app: &App, title: &str, area: Rect) {
-    let popup_area = centered_rect(60, 3, area);
+    let popup_area = centered_rect_fixed_height(60, 3, area);
     f.render_widget(Clear, popup_area);
 
-    let input = Paragraph::new(app.input.as_str()).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {title} "))
-            .border_style(Style::default().fg(Color::Yellow)),
-    );
+    let input = Paragraph::new(app.input.as_str())
+        .style(Style::default().fg(Color::White))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {title} "))
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
 
     f.render_widget(input, popup_area);
 
@@ -312,7 +314,7 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
 }
 
 fn draw_error_popup(f: &mut Frame, message: &str, area: Rect) {
-    let popup_area = centered_rect(60, 3, area);
+    let popup_area = centered_rect_fixed_height(60, 3, area);
     f.render_widget(Clear, popup_area);
 
     let error = Paragraph::new(message).block(
@@ -323,6 +325,26 @@ fn draw_error_popup(f: &mut Frame, message: &str, area: Rect) {
     );
 
     f.render_widget(error, popup_area);
+}
+
+fn centered_rect_fixed_height(percent_x: u16, height: u16, r: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(height),
+            Constraint::Fill(1),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
