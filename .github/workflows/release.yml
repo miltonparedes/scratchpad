@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release -p scratchpad --target ${{ matrix.target }}
+          else
+            cargo build --release -p scratchpad --target ${{ matrix.target }}
+          fi
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../sp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz sp
+          cd ../../..
+
+      - name: Checksum
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            shasum -a 256 sp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > sp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          else
+            sha256sum sp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > sp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sp-${{ matrix.target }}
+          path: |
+            sp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            sp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Collect checksums
+        run: cat artifacts/*.sha256 > artifacts/sp-${{ github.ref_name }}-SHA256SUMS.txt
+
+      - name: Remove individual checksums
+        run: rm artifacts/*.sha256
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

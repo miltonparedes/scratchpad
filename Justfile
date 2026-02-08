@@ -43,6 +43,12 @@ run *args:
 serve:
     cargo run -p scratchpad-server
 
+# Bump version in scratchpad crate and update lockfile
+bump version:
+    sed -i '' 's/^version = ".*"/version = "{{version}}"/' scratchpad/Cargo.toml
+    cargo check -p scratchpad
+    @echo "Bumped to {{version}} — commit and tag with: git tag v{{version}}"
+
 # Clean build artifacts
 clean:
     cargo clean
