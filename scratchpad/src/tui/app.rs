@@ -158,14 +158,13 @@ impl App {
     pub fn select_session_by_name(&mut self, name: &str) {
         let name_lower = name.to_lowercase();
         for (i, idx) in self.filtered_sessions.iter().enumerate() {
-            if let Some(session) = self.sessions.get(*idx) {
-                if session.slug.to_lowercase() == name_lower
-                    || session.slug.to_lowercase().starts_with(&name_lower)
-                {
-                    self.selected_index = i;
-                    self.load_selected_notes();
-                    return;
-                }
+            if let Some(session) = self.sessions.get(*idx)
+                && (session.slug.to_lowercase() == name_lower
+                    || session.slug.to_lowercase().starts_with(&name_lower))
+            {
+                self.selected_index = i;
+                self.load_selected_notes();
+                return;
             }
         }
     }

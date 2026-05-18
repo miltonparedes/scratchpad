@@ -81,10 +81,10 @@ impl Storage {
             }
 
             // Skip hidden directories
-            if let Some(name) = path.file_name() {
-                if name.to_string_lossy().starts_with('.') {
-                    continue;
-                }
+            if let Some(name) = path.file_name()
+                && name.to_string_lossy().starts_with('.')
+            {
+                continue;
             }
 
             let slug = path
