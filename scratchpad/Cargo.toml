@@ -1,9 +1,10 @@
 [package]
 name = "scratchpad"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 description = "Minimal TUI for organizing agent work sessions"
-license = "MIT"
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "sp"
@@ -13,17 +14,17 @@ path = "src/main.rs"
 ratatui = "0.30.0"
 ratatui-core = "0.1.0"
 crossterm = "0.29.0"
-tokio = { version = "1.49.0", features = ["full"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-toml = "0.8"
-clap = { version = "4.5.54", features = ["derive"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "1.1.2"
+clap = { version = "4.6.1", features = ["derive"] }
 directories = "6.0.0"
-chrono = { version = "0.4.43", features = ["serde"] }
-anyhow = "1.0.100"
+chrono.workspace = true
+anyhow.workspace = true
 ansi-to-tui = "8.0.1"
-rand = "0.9"
-which = "7.0"
+rand = "0.9.4"
+which = "8.0.2"
 
 [dev-dependencies]
 tempfile = "3"

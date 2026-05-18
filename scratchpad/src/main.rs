@@ -10,7 +10,7 @@ mod tui;
 
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::process;
 
 use anyhow::{Context as _, Result};
@@ -85,6 +85,30 @@ fn resolve_session(storage: &Storage, name: Option<String>) -> Result<Session> {
         },
         None => pick_session_fzf(storage),
     }
+}
+
+fn session_file_path(session_dir: &Path, file: &str) -> Result<PathBuf> {
+    let path = Path::new(file);
+    if path.is_absolute() {
+        anyhow::bail!("Session file path must be relative: {file}");
+    }
+
+    let mut clean_path = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => clean_path.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!("Session file path cannot escape the session directory: {file}");
+            }
+        }
+    }
+
+    if clean_path.as_os_str().is_empty() {
+        anyhow::bail!("Session file path cannot be empty");
+    }
+
+    Ok(session_dir.join(clean_path))
 }
 
 fn main() -> Result<()> {
@@ -256,7 +280,8 @@ fn main() -> Result<()> {
             let session = resolve_session(&storage, name)?;
             let content = match file {
                 Some(f) => {
-                    let path = storage.session_dir(&session.slug).join(&f);
+                    let session_dir = storage.session_dir(&session.slug);
+                    let path = session_file_path(&session_dir, &f)?;
                     fs::read_to_string(&path).with_context(|| format!("Failed to read {f}"))?
                 }
                 None => storage.read_notes(&session.slug)?,
@@ -269,7 +294,8 @@ fn main() -> Result<()> {
             io::stdin().read_to_string(&mut content)?;
             match file {
                 Some(f) => {
-                    let path = storage.session_dir(&session.slug).join(&f);
+                    let session_dir = storage.session_dir(&session.slug);
+                    let path = session_file_path(&session_dir, &f)?;
                     fs::write(&path, &content).with_context(|| format!("Failed to write {f}"))?;
                 }
                 None => storage.write_notes(&session.slug, &content)?,
@@ -470,4 +496,27 @@ fn print_flat_path(tree: &[models::FileTreeEntry], target: &models::FileTreeEntr
 
     path_parts.reverse();
     println!("{}", path_parts.join("/"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_file_path_accepts_nested_relative_paths() {
+        let path = session_file_path(Path::new("/tmp/session"), "docs/notes.md").unwrap();
+        assert_eq!(path, Path::new("/tmp/session/docs/notes.md"));
+    }
+
+    #[test]
+    fn session_file_path_rejects_parent_components() {
+        let err = session_file_path(Path::new("/tmp/session"), "../outside.md").unwrap_err();
+        assert!(err.to_string().contains("cannot escape"));
+    }
+
+    #[test]
+    fn session_file_path_rejects_absolute_paths() {
+        let err = session_file_path(Path::new("/tmp/session"), "/tmp/outside.md").unwrap_err();
+        assert!(err.to_string().contains("must be relative"));
+    }
 }
