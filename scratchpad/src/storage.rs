@@ -1,150 +1,168 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 
-use crate::models::{Config, Context, FileTreeEntry, Session};
+use crate::models::{Config, FileTreeEntry, Session, SessionMeta, SessionStatus};
+use crate::project::Project;
+
+pub const META_DIR: &str = ".sp";
+pub const META_FILE: &str = "meta.toml";
 
 pub struct Storage {
-    config: Config,
-    context: Context,
+    root: PathBuf,
+    project: Project,
 }
 
 impl Storage {
-    pub fn new(config: Config, context: Context) -> Self {
-        Self { config, context }
+    pub fn new(config: &Config, project: Project) -> Self {
+        let root = PathBuf::from(&config.workspace_path);
+        Self { root, project }
     }
 
-    pub fn workspace_path(&self) -> PathBuf {
-        match &self.context {
-            Context::User => PathBuf::from(&self.config.workspace_path),
-            Context::Project(path) => path.clone(),
+    pub fn workspace_root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn project_dir(&self) -> PathBuf {
+        if self.project.slug == "shared" {
+            self.root.join("shared")
+        } else {
+            self.root.join("projects").join(&self.project.slug)
         }
     }
 
-    #[allow(dead_code)]
-    pub fn context(&self) -> &Context {
-        &self.context
+    pub fn project(&self) -> &Project {
+        &self.project
     }
 
-    pub fn switch_context(&mut self, context: Context) {
-        self.context = context;
+    pub fn switch_project(&mut self, project: Project) {
+        self.project = project;
     }
 
-    /// Get the directory for a session by slug
     pub fn session_dir(&self, slug: &str) -> PathBuf {
-        self.workspace_path().join(slug)
+        self.project_dir().join(slug)
     }
 
     pub fn ensure_workspace(&self) -> Result<()> {
-        fs::create_dir_all(self.workspace_path())
-            .context("Failed to create workspace directory")?;
+        fs::create_dir_all(self.project_dir())
+            .with_context(|| format!("Failed to create {}", self.project_dir().display()))?;
         Ok(())
     }
 
-    pub fn create_session(&self, session: &Session, initial_note: Option<&str>) -> Result<()> {
-        if session.slug.is_empty() {
+    pub fn meta_path(&self, slug: &str) -> PathBuf {
+        self.session_dir(slug).join(META_DIR).join(META_FILE)
+    }
+
+    pub fn read_meta(&self, slug: &str) -> SessionMeta {
+        let path = self.meta_path(slug);
+        if !path.exists() {
+            return SessionMeta::default();
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return SessionMeta::default(),
+        };
+        toml::from_str(&content).unwrap_or_default()
+    }
+
+    pub fn write_meta(&self, slug: &str, meta: &SessionMeta) -> Result<()> {
+        let dir = self.session_dir(slug).join(META_DIR);
+        fs::create_dir_all(&dir).context("Failed to create .sp directory")?;
+        let path = dir.join(META_FILE);
+        let toml_str = toml::to_string_pretty(meta).context("Failed to serialize session meta")?;
+        fs::write(&path, toml_str).context("Failed to write session meta")?;
+        Ok(())
+    }
+
+    pub fn create_session(
+        &self,
+        slug: &str,
+        initial_note: Option<&str>,
+        tags: &[String],
+    ) -> Result<Session> {
+        if slug.is_empty() {
             anyhow::bail!("Session slug cannot be empty");
         }
-
-        let session_dir = self.session_dir(&session.slug);
-
-        // Prevent overwriting existing sessions
+        let session_dir = self.session_dir(slug);
         if session_dir.exists() {
-            anyhow::bail!("Session '{}' already exists", session.slug);
+            anyhow::bail!("Session '{slug}' already exists");
         }
-
         fs::create_dir_all(&session_dir).context("Failed to create session directory")?;
 
         let notes_content = initial_note.unwrap_or("");
         fs::write(session_dir.join("notes.md"), notes_content)
             .context("Failed to create notes.md")?;
 
-        Ok(())
+        let now = Utc::now();
+        let meta = SessionMeta {
+            project: Some(self.project.slug.clone()),
+            status: SessionStatus::Active,
+            tags: tags.to_vec(),
+            revision: if notes_content.is_empty() { 0 } else { 1 },
+            created_at: Some(now),
+        };
+        self.write_meta(slug, &meta)?;
+
+        Ok(self.load_session(slug)?.expect("freshly created session"))
+    }
+
+    pub fn load_session(&self, slug: &str) -> Result<Option<Session>> {
+        let session_dir = self.session_dir(slug);
+        if !session_dir.is_dir() {
+            return Ok(None);
+        }
+        let metadata = fs::metadata(&session_dir).ok();
+        let (created_at, updated_at) = fs_timestamps(metadata);
+        let meta = self.read_meta(slug);
+        Ok(Some(Session {
+            slug: slug.to_string(),
+            project: meta
+                .project
+                .clone()
+                .unwrap_or_else(|| self.project.slug.clone()),
+            path: session_dir,
+            status: meta.status,
+            tags: meta.tags.clone(),
+            revision: meta.revision,
+            created_at: meta.created_at.unwrap_or(created_at),
+            updated_at,
+        }))
     }
 
     pub fn list_sessions(&self) -> Result<Vec<Session>> {
-        let workspace = self.workspace_path();
-        if !workspace.exists() {
+        let project_dir = self.project_dir();
+        if !project_dir.exists() {
             return Ok(Vec::new());
         }
-
         let mut sessions = Vec::new();
-        for entry in fs::read_dir(&workspace).context("Failed to read workspace directory")? {
+        for entry in fs::read_dir(&project_dir).context("Failed to read project directory")? {
             let entry = entry?;
             let path = entry.path();
-
-            // Only include directories (not files like config)
             if !path.is_dir() {
                 continue;
             }
-
-            // Skip hidden directories
-            if let Some(name) = path.file_name()
-                && name.to_string_lossy().starts_with('.')
-            {
-                continue;
-            }
-
-            let slug = path
+            let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-
-            if slug.is_empty() {
+            if name.is_empty() || name.starts_with('.') {
                 continue;
             }
-
-            // Get timestamps from filesystem metadata
-            let metadata = fs::metadata(&path).ok();
-            let (created_at, updated_at) = if let Some(meta) = metadata {
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| {
-                        t.duration_since(std::time::UNIX_EPOCH)
-                            .ok()
-                            .map(|d| Utc.timestamp_opt(d.as_secs() as i64, 0).unwrap())
-                    })
-                    .unwrap_or_else(Utc::now);
-
-                // Try to get creation time, fall back to mtime
-                let ctime = meta
-                    .created()
-                    .ok()
-                    .and_then(|t| {
-                        t.duration_since(std::time::UNIX_EPOCH)
-                            .ok()
-                            .map(|d| Utc.timestamp_opt(d.as_secs() as i64, 0).unwrap())
-                    })
-                    .unwrap_or(mtime);
-
-                (ctime, mtime)
-            } else {
-                let now = Utc::now();
-                (now, now)
-            };
-
-            sessions.push(Session {
-                slug,
-                created_at,
-                updated_at,
-            });
+            if let Some(session) = self.load_session(&name)? {
+                sessions.push(session);
+            }
         }
-
-        // Sort by updated_at descending (most recent first)
         sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(sessions)
     }
 
-    /// Find the entry point file for a session (main.md, notes.md, readme.md, or first .md)
     pub fn find_entry_point(&self, slug: &str) -> Option<PathBuf> {
         let session_dir = self.session_dir(slug);
         find_entry_point_in_dir(&session_dir)
     }
 
-    /// Read the entry point file content
     pub fn read_notes(&self, slug: &str) -> Result<String> {
         if let Some(entry_point) = self.find_entry_point(slug) {
             fs::read_to_string(&entry_point)
@@ -154,9 +172,112 @@ impl Storage {
         }
     }
 
-    pub fn write_notes(&self, slug: &str, content: &str) -> Result<()> {
-        let notes_path = self.session_dir(slug).join("notes.md");
-        fs::write(&notes_path, content).context("Failed to write notes.md")
+    pub fn write_file(
+        &self,
+        slug: &str,
+        rel_file: &str,
+        content: &str,
+        expect_revision: Option<u64>,
+    ) -> Result<(PathBuf, u64)> {
+        let session_dir = self.session_dir(slug);
+        if !session_dir.exists() {
+            anyhow::bail!("Session '{slug}' not found");
+        }
+        let target = sanitize_path(&session_dir, rel_file)?;
+
+        let mut meta = self.read_meta(slug);
+        if let Some(expected) = expect_revision
+            && meta.revision != expected
+        {
+            return Err(RevisionConflict {
+                current: meta.revision,
+                expected,
+            }
+            .into());
+        }
+
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create parent directory for {}", target.display())
+            })?;
+        }
+        fs::write(&target, content)
+            .with_context(|| format!("Failed to write {}", target.display()))?;
+
+        meta.revision = meta.revision.saturating_add(1);
+        if meta.project.is_none() {
+            meta.project = Some(self.project.slug.clone());
+        }
+        if meta.created_at.is_none() {
+            meta.created_at = Some(Utc::now());
+        }
+        self.write_meta(slug, &meta)?;
+
+        Ok((target, meta.revision))
+    }
+
+    pub fn append_file(&self, slug: &str, rel_file: &str, content: &str) -> Result<(PathBuf, u64)> {
+        let session_dir = self.session_dir(slug);
+        if !session_dir.exists() {
+            anyhow::bail!("Session '{slug}' not found");
+        }
+        let target = sanitize_path(&session_dir, rel_file)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create parent directory for {}", target.display())
+            })?;
+        }
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&target)
+            .with_context(|| format!("Failed to open {} for append", target.display()))?;
+        file.write_all(content.as_bytes())
+            .with_context(|| format!("Failed to append to {}", target.display()))?;
+
+        let mut meta = self.read_meta(slug);
+        meta.revision = meta.revision.saturating_add(1);
+        if meta.project.is_none() {
+            meta.project = Some(self.project.slug.clone());
+        }
+        if meta.created_at.is_none() {
+            meta.created_at = Some(Utc::now());
+        }
+        self.write_meta(slug, &meta)?;
+
+        Ok((target, meta.revision))
+    }
+
+    pub fn attach_file(&self, slug: &str, source: &Path, name: Option<&str>) -> Result<PathBuf> {
+        let session_dir = self.session_dir(slug);
+        if !session_dir.exists() {
+            anyhow::bail!("Session '{slug}' not found");
+        }
+        let derived_name = source
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "attachment".to_string());
+        let final_name = name.unwrap_or(&derived_name);
+        let target = sanitize_path(&session_dir, final_name)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(source, &target).with_context(|| {
+            format!(
+                "Failed to copy {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+
+        let mut meta = self.read_meta(slug);
+        meta.revision = meta.revision.saturating_add(1);
+        if meta.project.is_none() {
+            meta.project = Some(self.project.slug.clone());
+        }
+        self.write_meta(slug, &meta)?;
+        Ok(target)
     }
 
     pub fn delete_session(&self, slug: &str) -> Result<()> {
@@ -167,61 +288,93 @@ impl Storage {
         Ok(())
     }
 
-    /// Find a session by exact name or prefix match
-    pub fn find_session_by_name(&self, name: &str) -> Result<Option<Session>> {
-        let sessions = self.list_sessions()?;
-        let name_lower = name.to_lowercase();
-
-        // First try exact match
-        for session in &sessions {
-            if session.slug.to_lowercase() == name_lower {
-                return Ok(Some(session.clone()));
-            }
-        }
-
-        // Then try prefix match
-        for session in sessions {
-            if session.slug.to_lowercase().starts_with(&name_lower) {
-                return Ok(Some(session));
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Rename a session (move its directory)
     pub fn rename_session(&self, old_slug: &str, new_slug: &str) -> Result<()> {
         let old_dir = self.session_dir(old_slug);
         let new_dir = self.session_dir(new_slug);
-
         if !old_dir.exists() {
             anyhow::bail!("Session '{old_slug}' not found");
         }
         if new_dir.exists() {
             anyhow::bail!("Session '{new_slug}' already exists");
         }
-
         fs::rename(&old_dir, &new_dir).context("Failed to rename session directory")?;
         Ok(())
     }
 
-    /// Get list of existing session slugs (for collision checking)
+    pub fn set_status(&self, slug: &str, status: SessionStatus) -> Result<()> {
+        let mut meta = self.read_meta(slug);
+        meta.status = status;
+        if meta.project.is_none() {
+            meta.project = Some(self.project.slug.clone());
+        }
+        self.write_meta(slug, &meta)
+    }
+
+    pub fn set_tags(&self, slug: &str, add: &[String], remove: &[String]) -> Result<Vec<String>> {
+        let mut meta = self.read_meta(slug);
+        for tag in remove {
+            meta.tags.retain(|t| t != tag);
+        }
+        for tag in add {
+            if !meta.tags.iter().any(|t| t == tag) {
+                meta.tags.push(tag.clone());
+            }
+        }
+        meta.tags.sort();
+        meta.tags.dedup();
+        if meta.project.is_none() {
+            meta.project = Some(self.project.slug.clone());
+        }
+        self.write_meta(slug, &meta)?;
+        Ok(meta.tags)
+    }
+
+    pub fn find_session_by_name(&self, name: &str) -> Result<Option<Session>> {
+        let sessions = self.list_sessions()?;
+        let name_lower = name.to_lowercase();
+        for session in &sessions {
+            if session.slug.to_lowercase() == name_lower {
+                return Ok(Some(session.clone()));
+            }
+        }
+        for session in sessions {
+            if session.slug.to_lowercase().starts_with(&name_lower) {
+                return Ok(Some(session));
+            }
+        }
+        Ok(None)
+    }
+
     pub fn existing_slugs(&self) -> Result<Vec<String>> {
         Ok(self.list_sessions()?.into_iter().map(|s| s.slug).collect())
     }
 }
 
-/// Find the entry point markdown file in a directory
+#[derive(Debug)]
+pub struct RevisionConflict {
+    pub current: u64,
+    pub expected: u64,
+}
+
+impl std::fmt::Display for RevisionConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "revision conflict (current: {}, expected: {})",
+            self.current, self.expected
+        )
+    }
+}
+
+impl std::error::Error for RevisionConflict {}
+
 pub fn find_entry_point_in_dir(dir: &Path) -> Option<PathBuf> {
-    // Priority order per spec
     for name in ["main.md", "notes.md", "readme.md", "README.md"] {
         let path = dir.join(name);
         if path.exists() {
             return Some(path);
         }
     }
-
-    // Fallback: first .md file alphabetically
     let mut md_files: Vec<PathBuf> = fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
@@ -232,20 +385,28 @@ pub fn find_entry_point_in_dir(dir: &Path) -> Option<PathBuf> {
                 .unwrap_or(false)
         })
         .collect();
-
     md_files.sort();
     md_files.first().cloned()
 }
 
-/// List all files in a session directory
 pub fn list_session_files(dir: &Path) -> Vec<PathBuf> {
     fs::read_dir(dir)
         .ok()
-        .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| !n.starts_with('.'))
+                        .unwrap_or(false)
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-/// Build a file tree for a session directory (pre-order traversal, flat list)
 pub fn build_file_tree(
     dir: &Path,
     entry_point: Option<&Path>,
@@ -267,12 +428,10 @@ fn build_file_tree_recursive(
     if depth > max_depth {
         return;
     }
-
     let read_dir = match fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(_) => return,
     };
-
     let mut children: Vec<_> = read_dir
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -282,7 +441,6 @@ fn build_file_tree_recursive(
                 .unwrap_or(false)
         })
         .collect();
-
     children.sort_by(|a, b| {
         let a_is_dir = a.path().is_dir();
         let b_is_dir = b.path().is_dir();
@@ -303,9 +461,7 @@ fn build_file_tree_recursive(
         } else {
             child.file_name().to_string_lossy().to_string()
         };
-
         let is_entry_point = entry_point.map(|ep| ep == path).unwrap_or(false);
-
         entries.push(FileTreeEntry {
             name,
             is_dir,
@@ -314,7 +470,6 @@ fn build_file_tree_recursive(
             is_entry_point,
             ancestor_is_last: ancestor_is_last.to_vec(),
         });
-
         if is_dir {
             let mut next_ancestors = ancestor_is_last.to_vec();
             next_ancestors.push(is_last);
@@ -330,29 +485,110 @@ fn build_file_tree_recursive(
     }
 }
 
-/// Detect the current context based on cwd
-pub fn detect_context(cwd: &Path, _config: &Config) -> Context {
-    // Walk up from cwd looking for .scratchpad/
-    for ancestor in cwd.ancestors() {
-        let project_pad = ancestor.join(".scratchpad");
-        if project_pad.is_dir() {
-            return Context::Project(project_pad);
+pub fn sanitize_path(session_dir: &Path, rel_file: &str) -> Result<PathBuf> {
+    let path = Path::new(rel_file);
+    if path.is_absolute() {
+        anyhow::bail!("File path must be relative: {rel_file}");
+    }
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!("File path cannot escape the session directory: {rel_file}");
+            }
         }
     }
-    Context::User
+    if clean.as_os_str().is_empty() {
+        anyhow::bail!("File path cannot be empty");
+    }
+    Ok(session_dir.join(clean))
 }
 
-/// Get all available contexts from cwd
-pub fn available_contexts(cwd: &Path, _config: &Config) -> Vec<Context> {
-    let mut contexts = vec![Context::User];
+fn fs_timestamps(metadata: Option<fs::Metadata>) -> (DateTime<Utc>, DateTime<Utc>) {
+    let Some(meta) = metadata else {
+        let now = Utc::now();
+        return (now, now);
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| Utc.timestamp_opt(d.as_secs() as i64, 0).unwrap())
+        })
+        .unwrap_or_else(Utc::now);
+    let ctime = meta
+        .created()
+        .ok()
+        .and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| Utc.timestamp_opt(d.as_secs() as i64, 0).unwrap())
+        })
+        .unwrap_or(mtime);
+    (ctime, mtime)
+}
 
-    for ancestor in cwd.ancestors() {
-        let project_pad = ancestor.join(".scratchpad");
-        if project_pad.is_dir() {
-            contexts.push(Context::Project(project_pad));
-            break;
+pub fn last_modified_file(dir: &Path, recurse_depth: usize) -> Option<(PathBuf, DateTime<Utc>)> {
+    let mut best: Option<(PathBuf, DateTime<Utc>)> = None;
+    visit_files(dir, recurse_depth, &mut |path, mtime| {
+        if best
+            .as_ref()
+            .map(|(_, current)| mtime > *current)
+            .unwrap_or(true)
+        {
+            best = Some((path.to_path_buf(), mtime));
         }
+    });
+    best
+}
+
+fn visit_files(dir: &Path, depth: usize, visitor: &mut dyn FnMut(&Path, DateTime<Utc>)) {
+    let read_dir = match fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            if depth > 0 {
+                visit_files(&path, depth - 1, visitor);
+            }
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let (_, mtime) = fs_timestamps(Some(meta));
+        visitor(&path, mtime);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_accepts_nested_relative_paths() {
+        let p = sanitize_path(Path::new("/tmp/session"), "docs/notes.md").unwrap();
+        assert_eq!(p, Path::new("/tmp/session/docs/notes.md"));
     }
 
-    contexts
+    #[test]
+    fn sanitize_rejects_parent_components() {
+        let err = sanitize_path(Path::new("/tmp/session"), "../outside.md").unwrap_err();
+        assert!(err.to_string().contains("cannot escape"));
+    }
+
+    #[test]
+    fn sanitize_rejects_absolute_paths() {
+        let err = sanitize_path(Path::new("/tmp/session"), "/etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("must be relative"));
+    }
 }

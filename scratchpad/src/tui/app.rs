@@ -9,8 +9,9 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::text::{Line, Text};
 
 use crate::markdown;
-use crate::models::{Agent, Config, Context, FileTreeEntry, Session};
+use crate::models::{Agent, Config, FileTreeEntry, Session};
 use crate::names::{generate_session_name, slugify_or_generate};
+use crate::project::{Project, ProjectSource};
 use crate::storage::{Storage, build_file_tree, list_session_files};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +32,7 @@ pub enum Focus {
 pub enum Action {
     Continue,
     Quit,
-    RunAgent(String, Agent), // slug, agent
+    RunAgent(String, Agent),
     ViewExternal(PathBuf),
     EditExternal(PathBuf),
     OpenFolder(PathBuf),
@@ -40,8 +41,8 @@ pub enum Action {
 pub struct App {
     pub storage: Storage,
     pub config: Config,
-    pub context: Context,
-    pub available_contexts: Vec<Context>,
+    pub project: Project,
+    pub available_projects: Vec<String>,
     pub sessions: Vec<Session>,
     pub selected_index: usize,
     pub mode: Mode,
@@ -56,23 +57,18 @@ pub struct App {
     pub rendered_notes: Option<Text<'static>>,
     rendered_notes_hash: u64,
     rendered_notes_width: u16,
-    /// Files in the session directory (for when no .md entry point)
     pub session_files: Vec<PathBuf>,
     pub file_tree: Vec<FileTreeEntry>,
 }
 
 impl App {
-    pub fn new(
-        storage: Storage,
-        config: Config,
-        context: Context,
-        available_contexts: Vec<Context>,
-    ) -> Self {
+    pub fn new(storage: Storage, config: Config, available_projects: Vec<String>) -> Self {
+        let project = storage.project().clone();
         Self {
             storage,
             config,
-            context,
-            available_contexts,
+            project,
+            available_projects,
             sessions: Vec::new(),
             selected_index: 0,
             mode: Mode::Normal,
@@ -111,6 +107,7 @@ impl App {
                 .filter(|(_, s)| {
                     s.slug.to_lowercase().contains(&query)
                         || s.display_title().to_lowercase().contains(&query)
+                        || s.tags.iter().any(|t| t.to_lowercase().contains(&query))
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -135,7 +132,6 @@ impl App {
             let slug = session.slug.clone();
             let session_dir = self.storage.session_dir(&slug);
             let entry_point = self.storage.find_entry_point(&slug);
-
             self.file_tree = build_file_tree(&session_dir, entry_point.as_deref(), 3);
 
             if let Some(ref ep) = entry_point {
@@ -174,19 +170,16 @@ impl App {
     }
 
     pub fn ensure_rendered_notes(&mut self, width: u16) {
-        // If we have session files instead of notes content, skip rendering
         if !self.session_files.is_empty() {
             self.rendered_notes = None;
             return;
         }
-
         if self.notes_content.is_empty() {
             self.rendered_notes = Some(Text::from(Line::from("")));
             self.rendered_notes_hash = 0;
             self.rendered_notes_width = width;
             return;
         }
-
         let width = width.max(20);
         let hash = calculate_hash(&self.notes_content);
         if self.rendered_notes.is_some()
@@ -195,16 +188,12 @@ impl App {
         {
             return;
         }
-
         match markdown::render_markdown(&self.notes_content, width) {
-            Ok(text) => {
-                self.rendered_notes = Some(text);
-            }
+            Ok(text) => self.rendered_notes = Some(text),
             Err(e) => {
                 self.rendered_notes = Some(Text::from(Line::from(format!("glow error: {e}"))));
             }
         }
-
         self.rendered_notes_hash = hash;
         self.rendered_notes_width = width;
     }
@@ -217,7 +206,6 @@ impl App {
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         self.error_message = None;
-
         match self.mode {
             Mode::Normal => self.handle_normal_key(key),
             Mode::Search => self.handle_search_key(key),
@@ -253,29 +241,16 @@ impl App {
                 self.show_preview = !self.show_preview;
                 Action::Continue
             }
-            // 'g' - toggle context
             KeyCode::Char('g') => {
-                if self.available_contexts.len() > 1 {
-                    let current_idx = self
-                        .available_contexts
-                        .iter()
-                        .position(|c| c == &self.context)
-                        .unwrap_or(0);
-                    let next_idx = (current_idx + 1) % self.available_contexts.len();
-                    self.context = self.available_contexts[next_idx].clone();
-                    self.storage.switch_context(self.context.clone());
-                    let _ = self.refresh_sessions();
-                }
+                self.cycle_project();
                 Action::Continue
             }
-            // 'e' - edit with editor
             KeyCode::Char('e') => {
                 if let Some(session) = self.selected_session() {
                     let slug = session.slug.clone();
                     if let Some(entry_point) = self.storage.find_entry_point(&slug) {
                         Action::EditExternal(entry_point)
                     } else {
-                        // Create notes.md if no entry point
                         let notes_path = self.storage.session_dir(&slug).join("notes.md");
                         if !notes_path.exists() {
                             let _ = std::fs::write(&notes_path, "");
@@ -286,14 +261,12 @@ impl App {
                     Action::Continue
                 }
             }
-            // 'v' - view with viewer
             KeyCode::Char('v') => {
                 if let Some(session) = self.selected_session() {
                     let slug = session.slug.clone();
                     if let Some(entry_point) = self.storage.find_entry_point(&slug) {
                         Action::ViewExternal(entry_point)
                     } else {
-                        // No entry point, open the folder
                         let session_dir = self.storage.session_dir(&slug);
                         Action::OpenFolder(session_dir)
                     }
@@ -301,7 +274,6 @@ impl App {
                     Action::Continue
                 }
             }
-            // 'o' - open folder
             KeyCode::Char('o') => {
                 if let Some(session) = self.selected_session() {
                     let session_dir = self.storage.session_dir(&session.slug);
@@ -360,6 +332,29 @@ impl App {
         }
     }
 
+    fn cycle_project(&mut self) {
+        if self.available_projects.is_empty() {
+            return;
+        }
+        let current_idx = self
+            .available_projects
+            .iter()
+            .position(|n| n == &self.project.slug)
+            .unwrap_or(0);
+        let next_idx = (current_idx + 1) % self.available_projects.len();
+        let next_name = self.available_projects[next_idx].clone();
+        let next_project = Project {
+            slug: next_name.clone(),
+            source: ProjectSource::Alias {
+                alias_name: next_name.clone(),
+                repo: String::new(),
+            },
+        };
+        self.project = next_project.clone();
+        self.storage.switch_project(next_project);
+        let _ = self.refresh_sessions();
+    }
+
     fn handle_search_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Enter => {
@@ -368,15 +363,11 @@ impl App {
                 self.load_selected_notes();
                 self.mode = Mode::Normal;
             }
-            KeyCode::Esc => {
-                self.mode = Mode::Normal;
-            }
+            KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Backspace => {
                 self.input.pop();
             }
-            KeyCode::Char(c) => {
-                self.input.push(c);
-            }
+            KeyCode::Char(c) => self.input.push(c),
             _ => {}
         }
         Action::Continue
@@ -391,24 +382,18 @@ impl App {
                 } else {
                     slugify_or_generate(&self.input, &existing, &self.config)
                 };
-
-                let session = Session::new(&slug);
-                if let Err(e) = self.storage.create_session(&session, None) {
+                if let Err(e) = self.storage.create_session(&slug, None, &[]) {
                     self.set_error(format!("Failed to create session: {e}"));
                 } else {
                     let _ = self.refresh_sessions();
                 }
                 self.mode = Mode::Normal;
             }
-            KeyCode::Esc => {
-                self.mode = Mode::Normal;
-            }
+            KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Backspace => {
                 self.input.pop();
             }
-            KeyCode::Char(c) => {
-                self.input.push(c);
-            }
+            KeyCode::Char(c) => self.input.push(c),
             _ => {}
         }
         Action::Continue
@@ -418,12 +403,9 @@ impl App {
         match key.code {
             KeyCode::Enter => {
                 if !self.input.is_empty() {
-                    // Generate a random name for quick session
                     let existing = self.storage.existing_slugs().unwrap_or_default();
                     let slug = generate_session_name(&existing, &self.config);
-
-                    let session = Session::new(&slug);
-                    if let Err(e) = self.storage.create_session(&session, Some(&self.input)) {
+                    if let Err(e) = self.storage.create_session(&slug, Some(&self.input), &[]) {
                         self.set_error(format!("Failed to create session: {e}"));
                     } else {
                         let _ = self.refresh_sessions();
@@ -431,15 +413,11 @@ impl App {
                 }
                 self.mode = Mode::Normal;
             }
-            KeyCode::Esc => {
-                self.mode = Mode::Normal;
-            }
+            KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Backspace => {
                 self.input.pop();
             }
-            KeyCode::Char(c) => {
-                self.input.push(c);
-            }
+            KeyCode::Char(c) => self.input.push(c),
             _ => {}
         }
         Action::Continue
@@ -447,9 +425,7 @@ impl App {
 
     fn handle_help_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
-                self.mode = Mode::Normal;
-            }
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => self.mode = Mode::Normal,
             _ => {}
         }
         Action::Continue

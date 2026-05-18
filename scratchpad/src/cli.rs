@@ -1,19 +1,13 @@
 use clap::{Parser, Subcommand};
 
-use crate::models::Agent;
-
 #[derive(Parser)]
 #[command(name = "sp")]
-#[command(about = "Minimal TUI for organizing agent work sessions")]
+#[command(about = "Workspace manager for human + agent sessions")]
 #[command(version)]
 pub struct Cli {
-    /// Force user context (~/.scratchpad)
-    #[arg(short = 'u', long)]
-    pub user: bool,
-
-    /// Force project context (.scratchpad/)
-    #[arg(short = 'p', long)]
-    pub project: bool,
+    /// Override active project (skips git autodetection)
+    #[arg(short = 'P', long, global = true)]
+    pub project: Option<String>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -24,120 +18,205 @@ pub enum Command {
     /// Create a new session
     #[command(alias = "n")]
     New {
-        /// Session name (slug). If not provided, one will be generated.
         name: Option<String>,
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
 
     /// Create a quick session with initial note
     #[command(alias = "q")]
     Quick {
-        /// Initial note text
         text: String,
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
 
     /// Open a session in TUI
     #[command(alias = "o")]
-    Open {
-        /// Session name (can be prefix)
-        name: Option<String>,
-    },
+    Open { name: Option<String> },
 
     /// Run an agent in the session context
     #[command(alias = "r")]
     Run {
-        /// Session name (can be prefix)
         name: Option<String>,
-        /// Agent to use (claude or codex)
         #[arg(short, long)]
-        agent: Option<Agent>,
+        agent: Option<String>,
     },
 
     /// View session entry point in external app
-    View {
-        /// Session name (can be prefix)
-        name: Option<String>,
-    },
+    View { name: Option<String> },
 
     /// Edit session entry point in editor
-    Edit {
-        /// Session name (can be prefix)
-        name: Option<String>,
-    },
+    Edit { name: Option<String> },
 
-    /// List all sessions
+    /// List sessions in the active project (or all with --all)
     #[command(alias = "ls")]
-    List,
-
-    /// Initialize a project-local scratchpad
-    Init {
-        /// Add to .gitignore (otherwise prompts)
+    List {
         #[arg(long)]
-        gitignore: bool,
-
-        /// Add to .git/info/exclude (otherwise prompts)
+        all: bool,
         #[arg(long)]
-        exclude: bool,
+        shared: bool,
+        #[arg(long)]
+        today: bool,
+        #[arg(long, value_name = "SPEC")]
+        since: Option<String>,
+        #[arg(long, value_name = "DATE")]
+        before: Option<String>,
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+        #[arg(long, value_name = "STATUS")]
+        status: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 
-    /// Rename a session
-    Rename {
-        /// Current session name (or prefix)
-        current: Option<String>,
-        /// New session name
-        new_name: String,
+    /// Search sessions by name and content
+    Search {
+        query: String,
+        #[arg(long)]
+        all: bool,
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+        #[arg(long, value_name = "STATUS")]
+        status: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 
-    /// Print session directory path
-    Path {
-        /// Session name (can be prefix)
+    /// Show the last (most recently modified) artifact in the active project
+    Last {
+        /// Number of artifacts to return
+        #[arg(short = 'n', long, default_value = "1")]
+        count: usize,
+        /// Search within a specific session
+        #[arg(long, value_name = "SESSION")]
+        r#in: Option<String>,
+        /// Look across all projects
+        #[arg(long)]
+        all: bool,
+        /// Print only the session slug
+        #[arg(long)]
+        session_only: bool,
+        /// Print as URI-style sp://session/file
+        #[arg(long)]
+        uri: bool,
+        /// Print absolute path (default)
+        #[arg(long)]
+        path: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Read session entry point or a specific file to stdout
+    #[command(alias = "cat")]
+    Read {
         name: Option<String>,
+        file: Option<String>,
     },
 
-    /// Open session folder in file manager
-    #[command(alias = "f")]
-    Folder {
-        /// Session name (can be prefix)
-        name: Option<String>,
+    /// Print absolute path for a session or file reference
+    Resolve {
+        #[arg(value_name = "REF")]
+        reference: String,
+    },
+
+    /// Write stdin to a session file
+    Write {
+        #[arg(value_name = "REF")]
+        reference: String,
+        /// Optional explicit file (alternative to ref form session/file)
+        file: Option<String>,
+        /// Expected revision (exit 4 if mismatch)
+        #[arg(long)]
+        expect_revision: Option<u64>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Append stdin to a session file
+    Append {
+        #[arg(value_name = "REF")]
+        reference: String,
+        file: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Copy a local file into a session
+    Attach {
+        session: String,
+        source: String,
+        #[arg(long = "as", value_name = "NAME")]
+        as_name: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show file tree for a session
     Files {
-        /// Session name (can be prefix)
         name: Option<String>,
-        /// Output flat list (no tree chars, for piping)
         #[arg(long)]
         flat: bool,
+        #[arg(long)]
+        json: bool,
     },
 
-    /// Read session entry point or a specific file
-    #[command(alias = "cat")]
-    Read {
-        /// Session name (can be prefix)
-        name: Option<String>,
-        /// Specific file to read (relative to session dir)
-        file: Option<String>,
+    /// Print session directory path
+    Path { name: Option<String> },
+
+    /// Open session folder in file manager
+    #[command(alias = "f")]
+    Folder { name: Option<String> },
+
+    /// Rename a session
+    Rename {
+        current: Option<String>,
+        new_name: String,
     },
 
-    /// Write stdin to session entry point or a specific file
-    Write {
-        /// Session name
-        name: String,
-        /// Specific file to write (relative to session dir, default: notes.md)
-        file: Option<String>,
+    /// Archive a session (sets status = archived)
+    Archive { name: String },
+
+    /// Restore an archived session (sets status = active)
+    Restore { name: String },
+
+    /// Add or remove tags from a session
+    Tag {
+        session: String,
+        /// Tag changes: bare name adds, +name adds, -name removes
+        changes: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
 
     /// Delete a session
     #[command(alias = "rm")]
     Delete {
-        /// Session name (can be prefix)
         name: String,
-        /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
     },
 
-    /// Show active context and workspace path
+    /// Show active project, source, and workspace location
     Context,
+
+    /// Manage projects and aliases
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
+
+    /// Print path for a session or file ref (alias: print path to stdout, optionally copy)
+    Link {
+        #[arg(value_name = "REF")]
+        reference: String,
+        #[arg(long)]
+        copy: bool,
+    },
 
     /// Manage configuration
     #[command(alias = "cfg")]
@@ -148,27 +227,47 @@ pub enum Command {
 
     /// Internal: hook handler for agent integrations
     #[command(hide = true)]
-    Hook {
-        /// Hook name: check-write
-        name: String,
-    },
+    Hook { name: String },
 
     /// Sync sessions with server (not yet implemented)
     Sync,
 }
 
 #[derive(Subcommand)]
+pub enum ProjectAction {
+    /// Show the active project, its source, and stats
+    Current {
+        #[arg(long)]
+        json: bool,
+    },
+    /// List configured aliases and detected projects on disk
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save the auto-detected project to config under a custom name
+    Save {
+        #[arg(long = "as", value_name = "NAME")]
+        as_name: Option<String>,
+    },
+    /// Link the current repo (or a specific repo) to a named project alias
+    Link {
+        name: String,
+        /// Repo identifier (owner/repo, host/owner/repo, or remote URL). Defaults to current repo.
+        repo: Option<String>,
+    },
+    /// Rename a project (moves directory + updates aliases)
+    Rename { old: String, new: String },
+}
+
+#[derive(Subcommand)]
 pub enum ConfigAction {
     /// Create default config file with documentation
     Init {
-        /// Overwrite existing config
         #[arg(long)]
         force: bool,
     },
-    /// Print config file path
     Path,
-    /// Show effective configuration
     Show,
-    /// Open config in editor
     Edit,
 }

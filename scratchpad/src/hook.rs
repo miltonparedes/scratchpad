@@ -14,7 +14,6 @@ pub fn handle(name: &str) -> Result<()> {
 }
 
 fn check_write() -> Result<()> {
-    // Read JSON from stdin (Claude Code PreToolUse input)
     let mut input = String::new();
     std::io::stdin()
         .read_to_string(&mut input)
@@ -23,7 +22,6 @@ fn check_write() -> Result<()> {
     let json: serde_json::Value =
         serde_json::from_str(&input).context("Failed to parse JSON input")?;
 
-    // Extract file_path from tool_input
     let file_path = json
         .get("tool_input")
         .and_then(|ti| ti.get("file_path"))
@@ -31,52 +29,37 @@ fn check_write() -> Result<()> {
         .unwrap_or("");
 
     if file_path.is_empty() {
-        // No file path — allow
         return Ok(());
     }
-
-    // Not a markdown file — allow silently
     if !file_path.ends_with(".md") {
         return Ok(());
     }
-
     let path = Path::new(file_path);
-
-    // Inside a scratchpad workspace — allow
     if is_inside_scratchpad(path) {
         return Ok(());
     }
-
-    // Known project file — allow
     if is_known_project_file(path) {
         return Ok(());
     }
 
-    // Loose .md file — ask the user
     let response = serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "ask",
             "permissionDecisionReason":
                 "Consider using a scratchpad session instead of a loose .md file. \
-                 Run `sp new` to create a session, then `sp write <session> <file>` to write there."
+                 Run `sp new` to create a session, then `sp write <session>/<file>` to write there."
         }
     });
-
     println!("{}", serde_json::to_string(&response)?);
     Ok(())
 }
 
 fn is_inside_scratchpad(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
-    // Check for .scratchpad/ directory (project context)
-    if path_str.contains("/.scratchpad/") || path_str.contains("\\.scratchpad\\") {
-        return true;
-    }
-    // Check for ~/scratchpad/ directory (user context)
     if let Some(home) = dirs_home_str() {
-        let user_workspace = format!("{home}/scratchpad/");
-        if path_str.starts_with(&user_workspace) {
+        let workspace = format!("{home}/.scratchpad/");
+        if path_str.starts_with(&workspace) {
             return true;
         }
     }
@@ -88,7 +71,6 @@ fn is_known_project_file(path: &Path) -> bool {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-
     matches!(
         name.as_str(),
         "README.md"

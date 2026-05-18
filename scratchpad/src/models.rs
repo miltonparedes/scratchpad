@@ -3,30 +3,19 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// A session is identified by its slug (folder name).
-/// Timestamps are derived from filesystem metadata.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Session {
-    /// Folder name, e.g., "quantum-reactor"
     pub slug: String,
-    /// From filesystem creation time (or mtime as fallback)
+    pub project: String,
+    pub path: PathBuf,
+    pub status: SessionStatus,
+    pub tags: Vec<String>,
+    pub revision: u64,
     pub created_at: DateTime<Utc>,
-    /// From filesystem mtime
     pub updated_at: DateTime<Utc>,
 }
 
 impl Session {
-    pub fn new(slug: impl Into<String>) -> Self {
-        let now = Utc::now();
-        Self {
-            slug: slug.into(),
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    /// Display the slug as a readable title (dashes become spaces, title case)
     pub fn display_title(&self) -> String {
         self.slug
             .split('-')
@@ -42,24 +31,30 @@ impl Session {
     }
 }
 
-/// Context determines where sessions are stored
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Context {
-    /// User-global scratchpad at ~/scratchpad
-    User,
-    /// Project-local scratchpad at .scratchpad/
-    Project(PathBuf),
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStatus {
+    #[default]
+    Active,
+    Archived,
 }
 
-impl Context {
-    pub fn display_name(&self) -> String {
+impl SessionStatus {
+    pub fn as_str(&self) -> &'static str {
         match self {
-            Context::User => "User".to_string(),
-            Context::Project(path) => path
-                .parent()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Project".to_string()),
+            SessionStatus::Active => "active",
+            SessionStatus::Archived => "archived",
+        }
+    }
+}
+
+impl std::str::FromStr for SessionStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "active" => Ok(SessionStatus::Active),
+            "archived" => Ok(SessionStatus::Archived),
+            other => Err(format!("Unknown status: {other}")),
         }
     }
 }
@@ -70,6 +65,7 @@ pub enum Agent {
     #[default]
     Claude,
     Codex,
+    Custom,
 }
 
 impl Agent {
@@ -77,6 +73,7 @@ impl Agent {
         match self {
             Agent::Claude => "claude",
             Agent::Codex => "codex",
+            Agent::Custom => "",
         }
     }
 }
@@ -86,6 +83,7 @@ impl std::fmt::Display for Agent {
         match self {
             Agent::Claude => write!(f, "claude"),
             Agent::Codex => write!(f, "codex"),
+            Agent::Custom => write!(f, "custom"),
         }
     }
 }
@@ -102,7 +100,6 @@ impl std::str::FromStr for Agent {
     }
 }
 
-/// A single entry in a file tree (pre-order traversal, flat list)
 #[derive(Debug, Clone)]
 pub struct FileTreeEntry {
     pub name: String,
@@ -119,9 +116,28 @@ pub struct ServerConfig {
     pub token: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostsConfig {
+    #[serde(default)]
+    pub short_form: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectAlias {
+    pub name: String,
+    #[serde(default)]
+    pub repos: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentBinding {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Config schema version for forward compatibility
     #[serde(default)]
     pub config_version: u32,
 
@@ -131,25 +147,33 @@ pub struct Config {
     #[serde(default)]
     pub default_agent: Agent,
 
-    /// Editor for `e` key / editing (e.g., "nvim", "code")
     #[serde(default)]
     pub editor: Option<String>,
 
-    /// Viewer for `v` key / viewing (uses system default if None)
     #[serde(default)]
     pub viewer: Option<String>,
 
-    /// Name generator: "auto", "claude", "codex", or "static"
     #[serde(default = "default_name_generator")]
     pub name_generator: String,
 
-    /// Optional sync server configuration
     #[serde(default)]
     pub server: Option<ServerConfig>,
+
+    #[serde(default)]
+    pub hosts: Option<HostsConfig>,
+
+    #[serde(default, rename = "projects")]
+    pub projects: Vec<ProjectAlias>,
+
+    #[serde(default)]
+    pub agents: std::collections::BTreeMap<String, AgentBinding>,
 }
 
 pub fn default_workspace_path() -> String {
-    dirs_home().join("scratchpad").to_string_lossy().to_string()
+    dirs_home()
+        .join(".scratchpad")
+        .to_string_lossy()
+        .to_string()
 }
 
 fn default_name_generator() -> String {
@@ -172,6 +196,23 @@ impl Default for Config {
             viewer: None,
             name_generator: default_name_generator(),
             server: None,
+            hosts: None,
+            projects: Vec::new(),
+            agents: std::collections::BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SessionMeta {
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub status: SessionStatus,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
 }

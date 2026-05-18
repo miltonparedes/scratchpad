@@ -13,14 +13,14 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use crate::models::{Config, Context};
+use crate::models::Config;
 use crate::open::{open_folder_nonblocking, open_path_nonblocking};
 use crate::storage::Storage;
 
 pub fn run(
     config: Config,
-    context: Context,
-    available_contexts: Vec<Context>,
+    storage: Storage,
+    available_projects: Vec<String>,
     session_name: Option<&str>,
 ) -> Result<()> {
     enable_raw_mode()?;
@@ -29,8 +29,7 @@ pub fn run(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let storage = Storage::new(config.clone(), context.clone());
-    let mut app = App::new(storage, config, context, available_contexts);
+    let mut app = App::new(storage, config, available_projects);
 
     let res = run_app(&mut terminal, &mut app, session_name);
 
@@ -45,7 +44,6 @@ pub fn run(
     if let Err(err) = res {
         eprintln!("Error: {err:?}");
     }
-
     Ok(())
 }
 
@@ -82,6 +80,10 @@ fn run_app(
                     let session_dir = app.storage.session_dir(&slug);
                     let status = std::process::Command::new(agent.command())
                         .current_dir(&session_dir)
+                        .env("SP_SESSION", &slug)
+                        .env("SP_PROJECT", &app.project.slug)
+                        .env("SP_WORKSPACE", app.storage.workspace_root())
+                        .env("SP_SESSION_DIR", &session_dir)
                         .status();
 
                     enable_raw_mode()?;
@@ -104,7 +106,6 @@ fn run_app(
                     }
                 }
                 app::Action::EditExternal(path) => {
-                    // For editor, we need to exit TUI temporarily
                     disable_raw_mode()?;
                     execute!(
                         terminal.backend_mut(),
@@ -126,8 +127,6 @@ fn run_app(
                         EnableMouseCapture
                     )?;
                     terminal.clear()?;
-
-                    // Reload notes after editing
                     app.refresh_sessions()?;
                 }
                 app::Action::OpenFolder(path) => {

@@ -2,106 +2,189 @@
 name: scratchpad
 description: |
   This skill should be used when the user asks to "create a session",
-  "write notes", "document a spec", "organize research", "set up scratchpad",
-  "configure sp", "install scratchpad", or needs to create documentation,
-  specs, plans, notes, research, or decisions. Also trigger on mentions of
-  "scratchpad", "session", or "sp".
+  "save logs", "capture a trace", "share an artifact", "look at the last
+  scratchpad", "document a spec", "organize research", "set up scratchpad",
+  "configure sp", or needs to persist any intermediate artifact (notes,
+  logs, dumps, specs, captures) for handoff to another agent. Also trigger
+  on mentions of "scratchpad", "session", or "sp".
 ---
 
-# Scratchpad (`sp`) — Session Management
+# Scratchpad (`sp`) — Project-aware artifact workspace
 
-Sessions are the canonical location for documentation artifacts. Each session is
-a directory with markdown files, managed by the `sp` CLI.
+`sp` persists artifacts (notes, logs, traces, specs, captures) into
+**sessions** scoped to the active **project**. The project is auto-detected
+from the current git repo. Each write returns an absolute path, which is the
+unit of exchange between agents.
 
-## Core Principle
+## Core principles
 
-**Always use sessions for documentation artifacts.** Instead of creating loose
-.md files in the project, organize them in `sp` sessions. This keeps work
-discoverable and structured.
+- **Path is the contract.** Every mutation prints the absolute path of what
+  was written. Pass that path to other agents or tools — do not synthesize
+  paths yourself.
+- **Read with your native tools.** Use the path returned by `sp` with your
+  built-in Read/Grep. Do not pipe large artifacts through `sp read`.
+- **Project is auto-detected.** From inside a git repo, `sp` figures out
+  the project (`acme/api`, `host/owner/repo`, or `basename` fallback). No
+  flags needed for normal use.
+- **Sessions are folders.** Inspectable, scriptable, no opaque database.
 
-## Commands
+## When to reach for `sp`
 
-### Discovery
+- The user says "save this for later", "share with the other agent", "look
+  at the last log", "make a scratchpad for this task".
+- You are about to generate a `.md`, `.log`, `.json`, or dump that would
+  otherwise clutter the repo.
+- You want a stable reference to attach to a Slack/PR/issue comment.
+- A handoff is implied: the user names another agent or asks to continue
+  work later.
+
+## Quick reference
 
 ```bash
-sp context              # show active context (user/project) and workspace path
-sp list                 # list all sessions (most recent first)
-sp read <session>       # read session entry point
-sp read <session> <file> # read specific file in session
-sp files <session>      # show file tree for a session
+# Discovery
+sp context                       # active project + source + workspace path
+sp list                          # sessions in the active project
+sp list --json                   # for programmatic use
+sp list --tag bug --since 3d     # filters
+sp last --path                   # absolute path of the latest artifact
+sp last --in <session> --path    # latest artifact in a specific session
+sp search "stripe"               # name + content search in active project
+sp files <session>               # file tree of a session
+
+# Mutation (each prints the absolute path)
+sp new <name>                    # new session (auto-named if omitted)
+sp new <name> --tag bug          # with a tag
+echo "..." | sp write <session>[/<file>]    # default file: notes.md
+echo "..." | sp append <session>/<file>     # append-only
+sp attach <session> ./local.log --as logs/deploy.log
+sp resolve <session>[/<file>]    # absolute path without writing anything
+
+# State
+sp tag <session> +urgent -draft
+sp archive <session>
+sp restore <session>
+sp rename <old> <new>
+
+# Sharing
+sp link <session>[/<file>]       # absolute path (use --copy for clipboard)
+
+# Projects (multi-repo / microservices)
+sp project current               # which project is active and why
+sp project list                  # all known projects (disk + aliases)
+sp project link <name>           # group the current repo into a named alias
+sp project save --as <name>      # persist the auto-detected project under a custom name
 ```
 
-### Creating & Writing
+## How project detection works
+
+`sp` resolves the active project in this order:
+
+1. `--project <name>` flag
+2. `SP_PROJECT` env var
+3. `git config sp.project` (per-repo escape hatch)
+4. `config.toml` alias matching any of the repo's remotes
+5. `origin` remote → `owner/repo` for known hosts, `host/owner/repo` for
+   self-hosted GitLabs etc.
+6. Basename of the git repo root (no remote)
+7. `shared` (no git)
+
+`sp context` prints the result + which rule fired.
+
+## Workflow patterns
+
+### "Capture and hand off"
 
 ```bash
-sp new [name]           # create session (auto-generates name if omitted)
-sp write <session> [file] # write stdin to session file (default: notes.md)
+# Agent A: capture a log and persist it
+./repro.sh 2>&1 > /tmp/capture.log
+sp new perf-issue
+sp attach perf-issue /tmp/capture.log --as capture.log
+# stdout: /Users/.../perf-issue/capture.log  ← pass this to the next agent
+```
 
-# Examples:
+### "Read the latest"
+
+```bash
+# User: "look at the last artifact and fix the errors"
+LATEST=$(sp last --path)
+# Use your native Read tool on $LATEST
+```
+
+### "Iterative notes with conflict detection"
+
+```bash
 sp new auth-refactor
-echo "# Auth Spec" | sp write auth-refactor spec.md
-cat design.md | sp write auth-refactor
+echo "# Plan" | sp write auth-refactor          # rev 1
+echo "# Plan v2" | sp write auth-refactor --expect-revision 1  # rev 2
+# Exit 4 if revision moved underneath you
 ```
 
-### Working Inside a Session
+### "Cross-repo project (microservices)"
 
 ```bash
-cd "$(sp path <session>)"   # enter session directory
-sp path <session>            # get directory path (for scripting)
+# From each repo, link once:
+cd payments-api && sp project link payments
+cd payments-worker && sp project link payments
+# From now on, sessions in either repo land in
+# ~/.scratchpad/projects/payments/ and list together.
 ```
 
-## Workflow
+## Output contracts
 
-1. Check context: `sp context` — identify where sessions will be created
-2. Search first: `sp list` — avoid duplicating existing sessions
-3. Create or reuse: `sp new <name>` or work with existing session
-4. Write content: pipe via `sp write` or write files directly in session dir
+- **stdout** = the value you want to consume (path, content, JSON).
+- **stderr** = human-friendly status, never script-parsed.
+- **Exit codes**:
+  - 0: ok
+  - 1: error
+  - 2: invalid usage
+  - 3: session not found
+  - 4: revision conflict (`--expect-revision` mismatch)
+  - 5: not in a project (no sessions found, fzf invoked with empty list)
 
-## When to Create vs Reuse
+## Environment variables inside `sp run`
 
-- **New session**: distinct task, new feature, separate concern
-- **Reuse existing**: continuation of prior work, updates to existing docs
-- Check with `sp list` and `sp read <session>` before creating
+When a session is launched via `sp run`, these vars are set for child
+processes:
 
-## Contexts
+- `SP_SESSION` — current session slug
+- `SP_PROJECT` — active project name
+- `SP_WORKSPACE` — workspace root (default `~/.scratchpad`)
+- `SP_SESSION_DIR` — absolute path to the session directory
 
-- **Project** (`-p`): `.scratchpad/` in repo — for project-specific docs
-- **User** (`-u`): `~/scratchpad` — for cross-project or personal notes
-- Auto-detected from cwd (project context preferred if `.scratchpad/` exists)
-
-## Environment Variables
-
-When launched via `sp run`, the following env vars are available:
-
-- `$SP_SESSION` — current session slug
-- `$SP_CONTEXT` — "user" or "project"
-- `$SP_WORKSPACE` — workspace directory path
-
-If `$SP_SESSION` is set, the process is already inside a session — write files
-directly instead of using `sp write`.
-
-Session names support prefix matching: `sp read quant` matches `quantum-reactor`.
+If `$SP_SESSION_DIR` is set, write files there directly instead of going
+through `sp write`.
 
 ## Configuration
 
-Run `sp config init` to create the config file. Key options:
+```bash
+sp config init      # creates ~/.scratchpad/config.toml
+sp config show      # current effective config
+sp config edit      # open in $EDITOR
+sp config path      # print path (default: ~/.scratchpad/config.toml)
+```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `workspace_path` | `~/scratchpad` | Where user-global sessions are stored |
-| `default_agent` | `claude` | Agent launched by `sp run` (`claude` or `codex`) |
-| `editor` | `$EDITOR` / `vi` | Editor for `sp edit` |
-| `viewer` | system default | Viewer for `sp view` |
-| `name_generator` | `auto` | Name strategy: `auto`, `claude`, `codex`, `static` |
+Key sections in `config.toml`:
 
-Initialize a project scratchpad with `sp init` in any repo root.
+```toml
+config_version = 2
+default_agent = "claude"
 
-## Additional Resources
+[hosts]
+short_form = ["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"]
 
-### Reference Files
+[[projects]]
+name = "payments"
+repos = ["acme/payments-api", "acme/payments-worker"]
 
-- **`references/SETUP.md`** — Installation, configuration options, and project setup guide. Load when the user needs to install `sp`, configure preferences, or initialize a project scratchpad.
+[agents.gemini]
+command = "gemini"
+args = []
+```
 
-### Templates
+## Additional resources
 
-- **`templates/rule.md`** — Agent rule template. Copy to the agent's rules/instructions directory so it always knows to use `sp` for documentation. See SETUP.md for per-agent locations.
+- **`references/SETUP.md`** — installation, configuration options, and
+  per-agent rule placement.
+- **`templates/rule.md`** — short rule snippet to copy into any agent's
+  global instructions (`AGENTS.md`, Codex `~/.codex/AGENTS.md`, Cursor
+  rules, etc.).

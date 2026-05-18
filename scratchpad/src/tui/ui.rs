@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
-use crate::models::Context;
+use crate::models::SessionStatus;
 
 use super::app::{App, Focus, Mode};
 
@@ -15,18 +15,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
         .split(size);
 
-    let content_area = main_chunks[0];
-    let status_area = main_chunks[1];
+    let header_area = main_chunks[0];
+    let content_area = main_chunks[1];
+    let status_area = main_chunks[2];
+
+    draw_header(f, app, header_area);
 
     if app.show_preview {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(content_area);
-
         draw_session_list(f, app, chunks[0]);
         draw_notes_panel(f, app, chunks[1]);
     } else {
@@ -36,7 +42,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_status_bar(f, app, status_area);
 
     match app.mode {
-        Mode::Search => draw_input_popup(f, app, "Search", size),
+        Mode::Search => draw_input_popup(f, app, "Search (name, slug, tag)", size),
         Mode::NewSession => draw_input_popup(f, app, "New Session (name, Enter for random)", size),
         Mode::QuickSession => draw_input_popup(f, app, "Quick Session (note)", size),
         Mode::Help => draw_help_popup(f, size),
@@ -46,6 +52,26 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(ref err) = app.error_message {
         draw_error_popup(f, err, size);
     }
+}
+
+fn draw_header(f: &mut Frame, app: &App, area: Rect) {
+    let project_label = format!(" project: {} ", app.project.slug);
+    let workspace = app.storage.project_dir();
+    let header = Line::from(vec![
+        Span::styled(
+            project_label,
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            workspace.display().to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(header), area);
 }
 
 fn draw_session_list(f: &mut Frame, app: &App, area: Rect) {
@@ -61,7 +87,8 @@ fn draw_session_list(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .filter_map(|(i, &idx)| {
             app.sessions.get(idx).map(|session| {
-                let style = if i == app.selected_index {
+                let is_selected = i == app.selected_index;
+                let base = if is_selected {
                     Style::default()
                         .bg(Color::DarkGray)
                         .add_modifier(Modifier::BOLD)
@@ -69,27 +96,38 @@ fn draw_session_list(f: &mut Frame, app: &App, area: Rect) {
                     Style::default()
                 };
 
-                let date = session.updated_at.format("%m/%d %H:%M");
-                let content = Line::from(vec![
-                    Span::styled(&session.slug, style),
-                    Span::styled(format!("  {date}"), Style::default().fg(Color::DarkGray)),
-                ]);
-
-                ListItem::new(content).style(style)
+                let date = session.updated_at.format("%m/%d %H:%M").to_string();
+                let mut spans: Vec<Span<'static>> = Vec::new();
+                spans.push(Span::styled(session.slug.clone(), base));
+                if session.status == SessionStatus::Archived {
+                    spans.push(Span::styled(
+                        " [arch]".to_string(),
+                        Style::default().fg(Color::Yellow),
+                    ));
+                }
+                if !session.tags.is_empty() {
+                    spans.push(Span::raw(" "));
+                    for tag in &session.tags {
+                        spans.push(Span::styled(
+                            format!("#{tag} "),
+                            Style::default().fg(Color::Magenta),
+                        ));
+                    }
+                }
+                spans.push(Span::styled(
+                    format!(" {date}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+                ListItem::new(Line::from(spans)).style(base)
             })
         })
         .collect();
 
-    let context_label = match &app.context {
-        Context::User => "User".to_string(),
-        Context::Project(_) => format!("Project: {}", app.context.display_name()),
-    };
-
     let title = if app.search_query.is_empty() {
-        format!(" {context_label} ({}) ", app.filtered_sessions.len())
+        format!(" sessions ({}) ", app.filtered_sessions.len())
     } else {
         format!(
-            " {context_label} ({}/{}) [{}] ",
+            " sessions ({}/{}) [{}] ",
             app.filtered_sessions.len(),
             app.sessions.len(),
             app.search_query
@@ -117,7 +155,18 @@ fn draw_notes_panel(f: &mut Frame, app: &mut App, area: Rect) {
 
     let title = app
         .selected_session()
-        .map(|s| format!(" {} ", s.display_title()))
+        .map(|s| {
+            if s.tags.is_empty() {
+                format!(" {} (rev {}) ", s.display_title(), s.revision)
+            } else {
+                format!(
+                    " {} (rev {}, #{}) ",
+                    s.display_title(),
+                    s.revision,
+                    s.tags.join(" #")
+                )
+            }
+        })
         .unwrap_or_else(|| " Notes ".to_string());
 
     let block = Block::default()
@@ -144,8 +193,7 @@ fn draw_notes_panel(f: &mut Frame, app: &mut App, area: Rect) {
         let content_area = chunks[1];
 
         let tree_text = render_file_tree(&app.file_tree, tree_area.width);
-        let tree_widget = Paragraph::new(tree_text);
-        f.render_widget(tree_widget, tree_area);
+        f.render_widget(Paragraph::new(tree_text), tree_area);
 
         let content_text = build_content_text(app, content_area);
         let content_widget = Paragraph::new(content_text)
@@ -168,7 +216,6 @@ fn build_content_text(app: &mut App, area: Rect) -> Text<'static> {
             Style::default().fg(Color::Yellow),
         ))];
         lines.push(Line::from(""));
-
         for file in &app.session_files {
             let name = file
                 .file_name()
@@ -176,13 +223,11 @@ fn build_content_text(app: &mut App, area: Rect) -> Text<'static> {
                 .unwrap_or_else(|| file.display().to_string());
             lines.push(Line::from(format!("  {name}")));
         }
-
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Press 'e' to create notes.md, 'o' to open folder",
             Style::default().fg(Color::DarkGray),
         )));
-
         Text::from(lines)
     } else if app.notes_content.is_empty() {
         Text::from(Line::from(Span::styled(
@@ -200,7 +245,6 @@ fn build_content_text(app: &mut App, area: Rect) -> Text<'static> {
 
 fn render_file_tree(tree: &[crate::models::FileTreeEntry], _width: u16) -> Text<'static> {
     let mut lines = Vec::new();
-
     lines.push(Line::from(Span::styled(
         format!("  Files ({})", tree.len()),
         Style::default()
@@ -210,7 +254,6 @@ fn render_file_tree(tree: &[crate::models::FileTreeEntry], _width: u16) -> Text<
 
     for entry in tree {
         let mut spans = Vec::new();
-
         spans.push(Span::raw("  "));
         for &ancestor_last in &entry.ancestor_is_last {
             if ancestor_last {
@@ -220,7 +263,6 @@ fn render_file_tree(tree: &[crate::models::FileTreeEntry], _width: u16) -> Text<
                 spans.push(Span::raw("   "));
             }
         }
-
         let connector = if entry.is_last {
             "└── "
         } else {
@@ -230,26 +272,21 @@ fn render_file_tree(tree: &[crate::models::FileTreeEntry], _width: u16) -> Text<
             connector,
             Style::default().fg(Color::DarkGray),
         ));
-
         let color = file_type_color(&entry.name, entry.is_dir);
         let mut style = Style::default().fg(color);
         if entry.is_entry_point {
             style = style.add_modifier(Modifier::BOLD);
         }
         spans.push(Span::styled(entry.name.clone(), style));
-
         if entry.is_entry_point {
             spans.push(Span::styled("  ●", Style::default().fg(Color::Cyan)));
         }
-
         lines.push(Line::from(spans));
     }
-
     lines.push(Line::from(Span::styled(
         "─".repeat(20),
         Style::default().fg(Color::DarkGray),
     )));
-
     Text::from(lines)
 }
 
@@ -280,8 +317,8 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
 
     let keybinds = match app.mode {
         Mode::Normal => {
-            if app.available_contexts.len() > 1 {
-                "n:new Q:quick /:search r:run e:edit v:view o:folder g:context ?:help q:quit"
+            if app.available_projects.len() > 1 {
+                "n:new Q:quick /:search r:run e:edit v:view o:folder g:project ?:help q:quit"
             } else {
                 "n:new Q:quick /:search r:run e:edit v:view o:folder ?:help q:quit"
             }
@@ -298,15 +335,12 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(" "),
         Span::styled(keybinds, Style::default().fg(Color::DarkGray)),
     ]);
-
-    let paragraph = Paragraph::new(status);
-    f.render_widget(paragraph, area);
+    f.render_widget(Paragraph::new(status), area);
 }
 
 fn draw_input_popup(f: &mut Frame, app: &App, title: &str, area: Rect) {
     let popup_area = centered_rect_fixed_height(60, 3, area);
     f.render_widget(Clear, popup_area);
-
     let input = Paragraph::new(app.input.as_str())
         .style(Style::default().fg(Color::White))
         .block(
@@ -315,16 +349,13 @@ fn draw_input_popup(f: &mut Frame, app: &App, title: &str, area: Rect) {
                 .title(format!(" {title} "))
                 .border_style(Style::default().fg(Color::Yellow)),
         );
-
     f.render_widget(input, popup_area);
-
     f.set_cursor_position((popup_area.x + app.input.len() as u16 + 1, popup_area.y + 1));
 }
 
 fn draw_help_popup(f: &mut Frame, area: Rect) {
     let popup_area = centered_rect(55, 70, area);
     f.render_widget(Clear, popup_area);
-
     let help_text = Text::from(vec![
         Line::from(Span::styled(
             "ScratchPad Keybindings",
@@ -341,7 +372,7 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("/", Style::default().fg(Color::Cyan)),
-            Span::raw("        Search sessions"),
+            Span::raw("        Search sessions (name + tag)"),
         ]),
         Line::from(vec![
             Span::styled("r", Style::default().fg(Color::Cyan)),
@@ -361,7 +392,7 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("g", Style::default().fg(Color::Cyan)),
-            Span::raw("        Toggle context (User/Project)"),
+            Span::raw("        Cycle through projects"),
         ]),
         Line::from(vec![
             Span::styled("p", Style::default().fg(Color::Cyan)),
@@ -392,7 +423,6 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
             Span::raw("        Quit"),
         ]),
     ]);
-
     let help = Paragraph::new(help_text)
         .block(
             Block::default()
@@ -401,21 +431,18 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
                 .border_style(Style::default().fg(Color::Green)),
         )
         .wrap(Wrap { trim: false });
-
     f.render_widget(help, popup_area);
 }
 
 fn draw_error_popup(f: &mut Frame, message: &str, area: Rect) {
     let popup_area = centered_rect_fixed_height(60, 3, area);
     f.render_widget(Clear, popup_area);
-
     let error = Paragraph::new(message).block(
         Block::default()
             .borders(Borders::ALL)
             .title(" Error ")
             .border_style(Style::default().fg(Color::Red)),
     );
-
     f.render_widget(error, popup_area);
 }
 
@@ -428,7 +455,6 @@ fn centered_rect_fixed_height(percent_x: u16, height: u16, r: Rect) -> Rect {
             Constraint::Fill(1),
         ])
         .split(r);
-
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -448,7 +474,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_y) / 2),
         ])
         .split(r);
-
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
